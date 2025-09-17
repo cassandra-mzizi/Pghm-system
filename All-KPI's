@@ -1,0 +1,572 @@
+/**
+ * KPI 1 — Litters per sow per year (herd average)
+ * Source: Litter Management Database (B:S)
+ * Writes result to Benchmark!D8
+ * Uses column headers to locate "Sow Number" and "D.O.B"
+ */
+function updateKPI1_LittersPerSowPerYear() {
+  const ss = SpreadsheetApp.getActive();
+
+  const LMD_SHEET_NAME = 'Litter Management Database';
+  const BENCH_SHEET_NAME = 'Benchmark';
+
+  const lmd = ss.getSheetByName(LMD_SHEET_NAME);
+  const bench = ss.getSheetByName(BENCH_SHEET_NAME);
+  if (!lmd) throw new Error('Sheet "Litter Management Database" not found.');
+  if (!bench) throw new Error('Sheet "Benchmark" not found.');
+
+  const HEADER_ROW = 1;
+  const START_ROW = 2;                // first data row
+  const START_COL = 2;                // column B
+  const NUM_COLS = 18;                // B..S
+
+  const lastRow = lmd.getLastRow();
+  if (lastRow < START_ROW) {
+    bench.getRange('D8').setValue('—');
+    return;
+  }
+
+  // Pull headers and data
+  const headers = lmd.getRange(HEADER_ROW, START_COL, 1, NUM_COLS).getValues()[0];
+  const data = lmd.getRange(START_ROW, START_COL, lastRow - START_ROW + 1, NUM_COLS).getValues();
+
+  // Find column indices by header names
+  const IDX_SOW = headers.indexOf("Sow Number");
+  const IDX_DOB = headers.indexOf("D.O.B");
+
+  if (IDX_SOW === -1) throw new Error('"Sow Number" column not found in Litter Management Database.');
+  if (IDX_DOB === -1) throw new Error('"D.O.B" column not found in Litter Management Database.');
+
+  // Collect farrowing dates by sow
+  const farrowingsBySow = {};
+  for (const row of data) {
+    const sowCell = row[IDX_SOW];
+    const dobCell = row[IDX_DOB];
+
+    if (!sowCell || !dobCell) continue;
+
+    const sowId = String(sowCell).trim();
+    const dob = normalizeDate(dobCell);
+    if (!sowId || !dob) continue;
+
+    if (!farrowingsBySow[sowId]) farrowingsBySow[sowId] = [];
+    farrowingsBySow[sowId].push(dob);
+  }
+
+  // Compute per-sow LPY
+  const perSowLPY = [];
+  for (const [sowId, dates] of Object.entries(farrowingsBySow)) {
+    if (dates.length < 2) continue;
+
+    dates.sort((a, b) => a - b);
+    const gaps = [];
+    for (let i = 1; i < dates.length; i++) {
+      const days = (dates[i] - dates[i - 1]) / 86400000;
+      if (days >= 100 && days <= 190) gaps.push(days);
+    }
+    if (gaps.length === 0) continue;
+
+    const avgIFP = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    const lpy = 365 / avgIFP;
+    perSowLPY.push(lpy);
+  }
+
+  // Herd average
+  const herdLPY = perSowLPY.length > 0 
+    ? perSowLPY.reduce((a, b) => a + b, 0) / perSowLPY.length 
+    : 0;
+
+  // Write to Benchmark!D8
+  bench.getRange('D8').setValue(herdLPY).setNumberFormat('0.00');
+}
+ //Robustly convert assorted cell contents to a Date or return null.
+
+function normalizeDate(value) {
+  if (value instanceof Date && !isNaN(value)) return value;
+
+  if (typeof value === 'number') {
+    const ms = Math.round((value - 25569) * 86400 * 1000);
+    const d = new Date(ms);
+    return isNaN(d) ? null : d;
+  }
+
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    if (!s || s === '-' || s.includes('out') || s.includes('foster')) return null;
+
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      const d = parseInt(m[1], 10);
+      const mo = parseInt(m[2], 10) - 1;
+      let y = parseInt(m[3], 10);
+      if (y < 100) y += 2000;
+      const dt = new Date(y, mo, d);
+      return isNaN(dt) ? null : dt;
+    }
+
+    const dt = new Date(value);
+    return isNaN(dt) ? null : dt;
+  }
+
+  return null;
+}
+
+function calculateTotalPigsBornPerLitter() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
+  const totalBorn = sheet.getRange("G2:G" + sheet.getLastRow()).getValues().flat().filter(Number);
+
+  if (totalBorn.length === 0) return;
+
+  const avgBorn = totalBorn.reduce((a, b) => a + b, 0) / totalBorn.length;
+
+  SpreadsheetApp.getActiveSpreadsheet()
+    .getSheetByName("Benchmark")
+    .getRange("D9").setValue(avgBorn.toFixed(2));
+}
+
+function calculatePigsBornAlivePerLitter() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
+  const bornAlive = sheet.getRange("J2:J" + sheet.getLastRow()).getValues().flat().filter(Number);
+
+  if (bornAlive.length === 0) return;
+
+  const avgAlive = bornAlive.reduce((a, b) => a + b, 0) / bornAlive.length;
+
+  SpreadsheetApp.getActiveSpreadsheet()
+    .getSheetByName("Benchmark")
+    .getRange("D10").setValue(avgAlive.toFixed(2));
+}
+
+ function calculatePreWeaningMortality() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
+  const totalBorn = sheet.getRange("G2:G" + sheet.getLastRow()).getValues().flat().filter(Number);
+  const numberWeaned = sheet.getRange("M2:M" + sheet.getLastRow()).getValues().flat().filter(Number);
+
+  if (totalBorn.length === 0 || numberWeaned.length === 0) return;
+
+  const bornSum = totalBorn.reduce((a, b) => a + b, 0);
+  const weanedSum = numberWeaned.reduce((a, b) => a + b, 0);
+  const mortality = ((bornSum - weanedSum) / bornSum) * 100;
+
+  SpreadsheetApp.getActiveSpreadsheet()
+    .getSheetByName("Benchmark")
+    .getRange("D11").setValue(mortality.toFixed(2) + "%");
+}
+
+/**
+ * KPI 5 — Weaned pigs per sow per year
+ * Formula: (Avg pigs weaned per litter) × (Litters per sow per year)
+ * Sources:
+ *   - Litter Management Database (B:S)
+ *   - Uses KPI 1 for LPY value
+ * Writes result to Benchmark!D12
+ */
+function updateKPI5_WeanedPigsPerSowPerYear() {
+  const ss = SpreadsheetApp.getActive();
+
+  // ----- Sheets -----
+  const LMD_SHEET_NAME = 'Litter Management Database';
+  const BENCH_SHEET_NAME = 'Benchmark';
+
+  const lmd = ss.getSheetByName(LMD_SHEET_NAME);
+  const bench = ss.getSheetByName(BENCH_SHEET_NAME);
+  if (!lmd || !bench) throw new Error('Required sheet not found.');
+
+  // ----- Fixed layout in LMD: columns B:S -----
+  // B = Sow Number
+  // F = D.O.B
+  // J = Born Alive
+  // M = Number Weaned
+  const HEADER_ROW = 1;
+  const START_ROW = 2;
+  const START_COL = 2;   // B
+  const NUM_COLS = 18;   // B..S
+
+  const IDX_SOW = 0;     // B relative to B
+  const IDX_DOB = 4;     // F relative to B
+  const IDX_BORN_ALIVE = 8; // J relative to B
+  const IDX_WEANED = 11; // M relative to B
+
+  const lastRow = lmd.getLastRow();
+  if (lastRow < START_ROW) {
+    bench.getRange('D12').setValue('—');
+    return;
+  }
+
+  const numRows = lastRow - START_ROW + 1;
+  const data = lmd.getRange(START_ROW, START_COL, numRows, NUM_COLS).getValues();
+
+  // ----- Collect weaned pigs -----
+  let totalWeaned = 0;
+  let totalLitters = 0;
+
+  for (const row of data) {
+    const bornAlive = parseFloat(row[IDX_BORN_ALIVE]);
+    const weaned = parseFloat(row[IDX_WEANED]);
+
+    if (!isNaN(bornAlive) && !isNaN(weaned) && bornAlive > 0 && weaned >= 0) {
+      totalWeaned += weaned;
+      totalLitters++;
+    }
+  }
+
+  if (totalLitters === 0) {
+    bench.getRange('D12').setValue('—');
+    return;
+  }
+
+  const avgWeanedPerLitter = totalWeaned / totalLitters;
+
+  // ----- Get Litters per sow per year from Benchmark!D8 -----
+  const littersPerSowPerYear = parseFloat(bench.getRange('D8').getValue()) || 0;
+
+  // ----- Calculate KPI -----
+  const weanedPerSowPerYear = avgWeanedPerLitter * littersPerSowPerYear;
+
+  // ----- Write result -----
+  bench.getRange('D12').setValue(weanedPerSowPerYear).setNumberFormat('0.00');
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+
+/**
+ * KPI 5 — Weaned pigs per sow per year
+ * Formula: (avg born alive per litter × herd LPY) × (1 - pre-weaning mortality fraction)
+ * Source: Benchmark sheet values
+ * Writes result to Benchmark!D12
+ */
+function updateKPI5_WeanedPerSowPerYear() {
+  const ss = SpreadsheetApp.getActive();
+  const bench = ss.getSheetByName('Benchmark');
+  if (!bench) throw new Error('Benchmark sheet not found.');
+
+  // Read required values
+  const bornAlive = bench.getRange('D10').getValue();   // avg pigs born alive per litter
+  const lpy       = bench.getRange('D8').getValue();   // litters per sow per year
+  let mortality   = bench.getRange('D11').getValue();  // pre-weaning mortality
+
+  // ----- Normalize mortality -----
+  // If mortality is entered as "22" (i.e. 22%), convert to fraction
+  if (mortality > 1) mortality = mortality / 100;
+
+  // Compute weaned pigs per sow per year
+  const weanedPerSow = bornAlive * lpy * (1 - mortality);
+
+  // Write result to D12 with two decimals
+  bench.getRange('D12').setValue(weanedPerSow).setNumberFormat('0.00');
+}
+
+/**
+ * KPI 6 — Farrowing rate (%)
+ * Formula: (# farrowings ÷ # matings) × 100
+ * Source: Sow Management Database (A:AE)
+ * Writes result to Benchmark!D13
+ */
+
+function updateKPI6_FarrowingRate() {
+  const ss = SpreadsheetApp.getActive();
+
+  // ----- Sheets -----
+  const SMD_SHEET_NAME = 'Sow Management Database';
+  const BENCH_SHEET_NAME = 'Benchmark';
+
+  const smd = ss.getSheetByName(SMD_SHEET_NAME);
+  const bench = ss.getSheetByName(BENCH_SHEET_NAME);
+  if (!smd || !bench) throw new Error('Required sheet not found.');
+
+  // ----- Layout -----
+  // F = Date Mated (index 5 since A=0)
+  // G = Actual Farrowing Date (index 6)
+  const HEADER_ROW = 1;
+  const START_ROW = 2;
+  const START_COL = 1;   // A
+  const NUM_COLS = 31;   // A..AE
+
+  const IDX_MATED = 5;
+  const IDX_FARROWED = 6;
+
+  const lastRow = smd.getLastRow();
+  if (lastRow < START_ROW) {
+    bench.getRange('D13').setValue('—');
+    return;
+  }
+
+  const numRows = lastRow - START_ROW + 1;
+  const data = smd.getRange(START_ROW, START_COL, numRows, NUM_COLS).getValues();
+
+  let matings = 0;
+  let farrowings = 0;
+
+  for (const row of data) {
+    const mated = normalizeDate(row[IDX_MATED]);
+    const farrowed = normalizeDate(row[IDX_FARROWED]);
+
+    if (mated) matings++;       // count all matings
+    if (farrowed) farrowings++; // count all farrowings
+  }
+
+  const rate = matings > 0 ? (farrowings / matings) * 100 : 0;
+
+  // ----- Write result -----
+  bench.getRange('D13').setValue(rate).setNumberFormat('0.00"%"');
+}
+
+function normalizeDate(value) {
+  if (value instanceof Date && !isNaN(value)) return value;
+
+  if (typeof value === 'number') {
+    const ms = Math.round((value - 25569) * 86400 * 1000);
+    const d = new Date(ms);
+    return isNaN(d) ? null : d;
+  }
+
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    if (!s || s === '-' || s.includes('out') || s.includes('foster')) return null;
+
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      const d = parseInt(m[1], 10);
+      const mo = parseInt(m[2], 10) - 1;
+      let y = parseInt(m[3], 10);
+      if (y < 100) y += 2000;
+      const dt = new Date(y, mo, d);
+      return isNaN(dt) ? null : dt;
+    }
+
+    const dt = new Date(value);
+    return isNaN(dt) ? null : dt;
+  }
+
+  return null;
+}
+
+function updateKPI7NonProductiveSowDays() {
+  const ss = SpreadsheetApp.getActive();
+
+  // ----- Sheets -----
+  const SMD_SHEET_NAME = 'Sow Management Database';
+  const BENCH_SHEET_NAME = 'Benchmark';
+
+  const smd = ss.getSheetByName(SMD_SHEET_NAME);
+  const bench = ss.getSheetByName(BENCH_SHEET_NAME);
+  if (!smd || !bench) throw new Error('Required sheet not found.');
+
+  // ----- Layout -----
+  const HEADER_ROW = 1;
+  const START_ROW = 2;
+
+  // Columns by letter
+  const COL_MATED = "F";
+  const COL_FARROWED = "G";
+  const COL_WEANED = "H";
+
+  const lastRow = smd.getLastRow();
+  if (lastRow < START_ROW) {
+    bench.getRange("D14").setValue("—");
+    return;
+  }
+
+  // Get values
+  const matings = smd.getRange(`${COL_MATED}${START_ROW}:${COL_MATED}${lastRow}`).getValues().flat();
+  const farrowings = smd.getRange(`${COL_FARROWED}${START_ROW}:${COL_FARROWED}${lastRow}`).getValues().flat();
+  const weanings = smd.getRange(`${COL_WEANED}${START_ROW}:${COL_WEANED}${lastRow}`).getValues().flat();
+
+  let intervals = [];
+
+  for (let i = 0; i < matings.length; i++) {
+    const mated = normalizeDate(matings[i]);
+    const farrowed = normalizeDate(farrowings[i]);
+    const weaned = normalizeDate(weanings[i]);
+
+    // Case 1: Weaned -> Next Mating
+    if (weaned && mated && mated > weaned) {
+      intervals.push((mated - weaned) / 86400000);
+    }
+
+    // Case 2: Mating failed -> Next Mating (no farrow, but later mating)
+    if (mated && !farrowed) {
+      // Look ahead for next mating
+      for (let j = i + 1; j < matings.length; j++) {
+        const nextMating = normalizeDate(matings[j]);
+        if (nextMating && nextMating > mated) {
+          intervals.push((nextMating - mated) / 86400000);
+          break;
+        }
+      }
+    }
+  }
+
+  const avgNPD = intervals.length > 0
+    ? intervals.reduce((a, b) => a + b, 0) / intervals.length
+    : 0;
+
+  // ----- Write result -----
+  bench.getRange("D14").setValue(avgNPD).setNumberFormat("0.00");
+}
+function normalizeDate(value) {
+  if (value instanceof Date && !isNaN(value)) return value;
+
+  if (typeof value === 'number') {
+    const ms = Math.round((value - 25569) * 86400 * 1000);
+    const d = new Date(ms);
+    return isNaN(d) ? null : d;
+  }
+
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    if (!s || s === '-' || s.includes('out') || s.includes('foster')) return null;
+
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      const d = parseInt(m[1], 10);
+      const mo = parseInt(m[2], 10) - 1;
+      let y = parseInt(m[3], 10);
+      if (y < 100) y += 2000;
+      const dt = new Date(y, mo, d);
+      return isNaN(dt) ? null : dt;
+    }
+
+    const dt = new Date(value);
+    return isNaN(dt) ? null : dt;
+  }
+
+  return null;
+}
+
+function calculateInterFarrowingPeriods() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Sow Management Database");
+  if (!sheet) throw new Error("Sheet 'Sow Management Database' not found.");
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) throw new Error("No data rows found.");
+
+  // A = Sow ID, C = Parity, G = Farrowing Date
+  const data = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+
+  let sowData = {};
+  let allIntervals = [];
+
+  data.forEach((row, i) => {
+    let sowId = row[0];
+    let parity = row[2];
+    let farrowDate = row[6];
+
+    if (sowId && parity && farrowDate) {
+      let dateObj = (farrowDate instanceof Date) ? farrowDate : new Date(farrowDate);
+      if (!isNaN(dateObj)) {
+        if (!sowData[sowId]) sowData[sowId] = [];
+        sowData[sowId].push({ parity: Number(parity), farrowDate: dateObj });
+      }
+    }
+  });
+
+  for (let sowId in sowData) {
+    if (sowData[sowId].length < 2) continue; // skip if only one farrowing
+
+    // Sort by parity
+    sowData[sowId].sort((a, b) => a.parity - b.parity);
+
+    for (let i = 1; i < sowData[sowId].length; i++) {
+      let prevDate = sowData[sowId][i - 1].farrowDate;
+      let currDate = sowData[sowId][i].farrowDate;
+
+      // Days difference
+      let diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
+
+      if (diffDays > 0) {
+        allIntervals.push(diffDays);
+        Logger.log(
+          "Sow " + sowId +
+          " parity " + sowData[sowId][i - 1].parity +
+          " → " + sowData[sowId][i].parity +
+          " = " + diffDays.toFixed(2) + " days"
+        );
+      }
+    }
+  }
+
+  let herdAvg = allIntervals.length > 0
+    ? allIntervals.reduce((a, b) => a + b, 0) / allIntervals.length
+    : 0;
+
+  Logger.log("All intervals: " + allIntervals);
+  Logger.log("Herd Average Inter-Farrowing Period: " + herdAvg.toFixed(2));
+
+  const benchmarkSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Benchmark");
+  if (benchmarkSheet) {
+    benchmarkSheet.getRange("D16").setValue(herdAvg).setNumberFormat("0.00");
+  }
+}
+
+function updateDaysToSlaughter() {
+  const ss = SpreadsheetApp.getActive();
+  const LITTER_SHEET_NAME = 'Litter Management Database';
+  const BENCH_SHEET_NAME = 'Benchmark';
+  
+  const sheet = ss.getSheetByName(LITTER_SHEET_NAME);
+  const bench = ss.getSheetByName(BENCH_SHEET_NAME);
+  
+  if (!sheet || !bench) throw new Error('Required sheet not found.');
+
+  const START_ROW = 2;
+  const COL_DOB = "F";
+  const COL_KILLED = "N";
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < START_ROW) {
+    bench.getRange("D19").setValue("—");
+    return;
+  }
+
+  const dobs = sheet.getRange(`${COL_DOB}${START_ROW}:${COL_DOB}${lastRow}`).getValues().flat();
+  const killedDates = sheet.getRange(`${COL_KILLED}${START_ROW}:${COL_KILLED}${lastRow}`).getValues().flat();
+
+  let totalDays = 0;
+  let count = 0;
+
+  for (let i = 0; i < dobs.length; i++) {
+    const dob = normalizeDate(dobs[i]);
+    const killed = normalizeDate(killedDates[i]);
+    if (dob && killed && killed >= dob) {
+      const days = (killed - dob) / 86400000;
+      totalDays += days;
+      count++;
+    }
+  }
+
+  const avgDTS = count > 0 ? totalDays / count : 0;
+
+  bench.getRange("D19").setValue(avgDTS).setNumberFormat("0.0"); // Rounded to 1 decimal
+}
+
+function normalizeDate(value) {
+  if (value instanceof Date && !isNaN(value)) return value;
+
+  if (typeof value === 'number') {
+    const ms = Math.round((value - 25569) * 86400 * 1000);
+    const d = new Date(ms);
+    return isNaN(d) ? null : d;
+  }
+
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    if (!s || s === '-' || s.includes('out') || s.includes('foster')) return null;
+
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      const d = parseInt(m[1], 10);
+      const mo = parseInt(m[2], 10) - 1;
+      let y = parseInt(m[3], 10);
+      if (y < 100) y += 2000;
+      const dt = new Date(y, mo, d);
+      return isNaN(dt) ? null : dt;
+    }
+
+    const dt = new Date(value);
+    return isNaN(dt) ? null : dt;
+  }
+
+  return null;
+}
