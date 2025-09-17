@@ -1,9 +1,7 @@
-/**
- * KPI 1 — Litters per sow per year (herd average)
- * Source: Litter Management Database (B:S)
- * Writes result to Benchmark!D8
- * Uses column headers to locate "Sow Number" and "D.O.B"
- */
+// === KPI FUNCTIONS ===
+
+// KPI 1 — Litters per sow per year - D6
+
 function updateKPI1_LittersPerSowPerYear() {
   const ss = SpreadsheetApp.getActive();
 
@@ -22,7 +20,7 @@ function updateKPI1_LittersPerSowPerYear() {
 
   const lastRow = lmd.getLastRow();
   if (lastRow < START_ROW) {
-    bench.getRange('D8').setValue('—');
+    bench.getRange('D6').setValue('—');
     return;
   }
 
@@ -77,7 +75,7 @@ function updateKPI1_LittersPerSowPerYear() {
     : 0;
 
   // Write to Benchmark!D8
-  bench.getRange('D8').setValue(herdLPY).setNumberFormat('0.00');
+  bench.getRange('D6').setValue(herdLPY).setNumberFormat('0.00');
 }
  //Robustly convert assorted cell contents to a Date or return null.
 
@@ -111,6 +109,8 @@ function normalizeDate(value) {
   return null;
 }
 
+// KPI 2 — Total pigs born per litter - D7
+
 function calculateTotalPigsBornPerLitter() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
   const totalBorn = sheet.getRange("G2:G" + sheet.getLastRow()).getValues().flat().filter(Number);
@@ -121,8 +121,10 @@ function calculateTotalPigsBornPerLitter() {
 
   SpreadsheetApp.getActiveSpreadsheet()
     .getSheetByName("Benchmark")
-    .getRange("D9").setValue(avgBorn.toFixed(2));
+    .getRange("D7").setValue(avgBorn.toFixed(2));
 }
+
+// KPI 3 — Pigs born alive per litter - D8 
 
 function calculatePigsBornAlivePerLitter() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
@@ -134,9 +136,10 @@ function calculatePigsBornAlivePerLitter() {
 
   SpreadsheetApp.getActiveSpreadsheet()
     .getSheetByName("Benchmark")
-    .getRange("D10").setValue(avgAlive.toFixed(2));
+    .getRange("D8").setValue(avgAlive.toFixed(2));
 }
 
+// KPI 4 — Pre-weaning mortality - D9
  function calculatePreWeaningMortality() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
   const totalBorn = sheet.getRange("G2:G" + sheet.getLastRow()).getValues().flat().filter(Number);
@@ -150,17 +153,12 @@ function calculatePigsBornAlivePerLitter() {
 
   SpreadsheetApp.getActiveSpreadsheet()
     .getSheetByName("Benchmark")
-    .getRange("D11").setValue(mortality.toFixed(2) + "%");
+    .getRange("D9").setValue(mortality.toFixed(2) + "%");
 }
 
-/**
- * KPI 5 — Weaned pigs per sow per year
- * Formula: (Avg pigs weaned per litter) × (Litters per sow per year)
- * Sources:
- *   - Litter Management Database (B:S)
- *   - Uses KPI 1 for LPY value
- * Writes result to Benchmark!D12
- */
+// KPI 5 — Weaned pigs per sow per year - D10
+  // (depends on KPI 1, 3, and 4 already being updated)
+
 function updateKPI5_WeanedPigsPerSowPerYear() {
   const ss = SpreadsheetApp.getActive();
 
@@ -211,7 +209,7 @@ function updateKPI5_WeanedPigsPerSowPerYear() {
   }
 
   if (totalLitters === 0) {
-    bench.getRange('D12').setValue('—');
+    bench.getRange('D10').setValue('—');
     return;
   }
 
@@ -224,45 +222,10 @@ function updateKPI5_WeanedPigsPerSowPerYear() {
   const weanedPerSowPerYear = avgWeanedPerLitter * littersPerSowPerYear;
 
   // ----- Write result -----
-  bench.getRange('D12').setValue(weanedPerSowPerYear).setNumberFormat('0.00');
+  bench.getRange('D10').setValue(weanedPerSowPerYear).setNumberFormat('0.00');
 }
 
-
-/////////////////////////////////////////////////////////////////////////////
-
-/**
- * KPI 5 — Weaned pigs per sow per year
- * Formula: (avg born alive per litter × herd LPY) × (1 - pre-weaning mortality fraction)
- * Source: Benchmark sheet values
- * Writes result to Benchmark!D12
- */
-function updateKPI5_WeanedPerSowPerYear() {
-  const ss = SpreadsheetApp.getActive();
-  const bench = ss.getSheetByName('Benchmark');
-  if (!bench) throw new Error('Benchmark sheet not found.');
-
-  // Read required values
-  const bornAlive = bench.getRange('D10').getValue();   // avg pigs born alive per litter
-  const lpy       = bench.getRange('D8').getValue();   // litters per sow per year
-  let mortality   = bench.getRange('D11').getValue();  // pre-weaning mortality
-
-  // ----- Normalize mortality -----
-  // If mortality is entered as "22" (i.e. 22%), convert to fraction
-  if (mortality > 1) mortality = mortality / 100;
-
-  // Compute weaned pigs per sow per year
-  const weanedPerSow = bornAlive * lpy * (1 - mortality);
-
-  // Write result to D12 with two decimals
-  bench.getRange('D12').setValue(weanedPerSow).setNumberFormat('0.00');
-}
-
-/**
- * KPI 6 — Farrowing rate (%)
- * Formula: (# farrowings ÷ # matings) × 100
- * Source: Sow Management Database (A:AE)
- * Writes result to Benchmark!D13
- */
+// KPI 6 — Farrowing rate - D11
 
 function updateKPI6_FarrowingRate() {
   const ss = SpreadsheetApp.getActive();
@@ -288,7 +251,7 @@ function updateKPI6_FarrowingRate() {
 
   const lastRow = smd.getLastRow();
   if (lastRow < START_ROW) {
-    bench.getRange('D13').setValue('—');
+    bench.getRange('D11').setValue('—');
     return;
   }
 
@@ -309,7 +272,7 @@ function updateKPI6_FarrowingRate() {
   const rate = matings > 0 ? (farrowings / matings) * 100 : 0;
 
   // ----- Write result -----
-  bench.getRange('D13').setValue(rate).setNumberFormat('0.00"%"');
+  bench.getRange('D11').setValue(rate).setNumberFormat('0.00"%"');
 }
 
 function normalizeDate(value) {
@@ -342,6 +305,8 @@ function normalizeDate(value) {
   return null;
 }
 
+// KPI 7 — Non-productive sow days - D12 
+
 function updateKPI7NonProductiveSowDays() {
   const ss = SpreadsheetApp.getActive();
 
@@ -364,7 +329,7 @@ function updateKPI7NonProductiveSowDays() {
 
   const lastRow = smd.getLastRow();
   if (lastRow < START_ROW) {
-    bench.getRange("D14").setValue("—");
+    bench.getRange("D12").setValue("—");
     return;
   }
 
@@ -403,7 +368,7 @@ function updateKPI7NonProductiveSowDays() {
     : 0;
 
   // ----- Write result -----
-  bench.getRange("D14").setValue(avgNPD).setNumberFormat("0.00");
+  bench.getRange("D12").setValue(avgNPD).setNumberFormat("0.00");
 }
 function normalizeDate(value) {
   if (value instanceof Date && !isNaN(value)) return value;
@@ -434,6 +399,8 @@ function normalizeDate(value) {
 
   return null;
 }
+
+// KPI 8 — Inter-farrowing period - D13 
 
 function calculateInterFarrowingPeriods() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Sow Management Database");
@@ -496,9 +463,11 @@ function calculateInterFarrowingPeriods() {
 
   const benchmarkSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Benchmark");
   if (benchmarkSheet) {
-    benchmarkSheet.getRange("D16").setValue(herdAvg).setNumberFormat("0.00");
+    benchmarkSheet.getRange("D13").setValue(herdAvg).setNumberFormat("0.00");
   }
 }
+
+// KPI 9 — Days to slaughter - D14
 
 function updateDaysToSlaughter() {
   const ss = SpreadsheetApp.getActive();
@@ -516,7 +485,7 @@ function updateDaysToSlaughter() {
 
   const lastRow = sheet.getLastRow();
   if (lastRow < START_ROW) {
-    bench.getRange("D19").setValue("—");
+    bench.getRange("D14").setValue("—");
     return;
   }
 
@@ -538,7 +507,7 @@ function updateDaysToSlaughter() {
 
   const avgDTS = count > 0 ? totalDays / count : 0;
 
-  bench.getRange("D19").setValue(avgDTS).setNumberFormat("0.0"); // Rounded to 1 decimal
+  bench.getRange("D14").setValue(avgDTS).setNumberFormat("0.0"); // Rounded to 1 decimal
 }
 
 function normalizeDate(value) {
@@ -569,4 +538,44 @@ function normalizeDate(value) {
   }
 
   return null;
+}
+
+// === HELPER FUNCTIONS ===
+
+
+
+
+
+function updateKPIs() {
+  // KPI 1 — Litters per sow per year - D6
+   updateKPI1_LittersPerSowPerYear();
+
+  // KPI 2 — Total pigs born per litter - D7
+  calculateTotalPigsBornPerLitter();
+
+  // KPI 3 — Pigs born alive per litter - D8 
+  calculatePigsBornAlivePerLitter();
+
+  // KPI 4 — Pre-weaning mortality - D9
+   calculatePreWeaningMortality();
+
+  // KPI 5 — Weaned pigs per sow per year - D10
+  // (depends on KPI 1, 3, and 4 already being updated)
+
+  updateKPI5_WeanedPigsPerSowPerYear();
+
+  // KPI 6 — Farrowing rate - D11
+
+  updateKPI6_FarrowingRate();
+
+  // KPI 7 — Non-productive sow days - D12 
+ 
+  updateKPI7NonProductiveSowDays()
+
+  // KPI 8 — Inter-farrowing period - D13 
+
+  calculateInterFarrowingPeriods();
+
+  // KPI 9 — Days to slaughter - D14
+  updateDaysToSlaughter();
 }
