@@ -1,0 +1,282 @@
+// LICENSE VALIDATION SYSTEM
+
+function validateLicense() {
+  createOnOpenTrigger(); // Ensure the onOpen trigger is created
+  const FIRESTORE_QUERY_URL = "https://firestore.googleapis.com/v1/projects/pig-herd-management-admin/databases/(default)/documents:runQuery";
+  const FIRESTORE_DOCS_BASE = "https://firestore.googleapis.com/v1/projects/pig-herd-management-admin/databases/(default)/documents/licenses";
+  const activeSpreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const signInSheet = activeSpreadsheet.getSheetByName("Sign-in");
+
+  if (!signInSheet) {
+    SpreadsheetApp.getUi().alert("Sign-in sheet not found.");
+    return;
+  }
+
+  const email = String(signInSheet.getRange("D5").getValue()).trim();
+  const licenseKey = String(signInSheet.getRange("D8").getValue()).trim();
+  const url = activeSpreadsheet.getUrl();
+
+  if (!email || !licenseKey) {
+    SpreadsheetApp.getUi().alert("Please enter both email and license key.");
+    return;
+  }
+
+  const payload = {
+    structuredQuery: {
+      where: {
+        compositeFilter: {
+          op: "AND",
+          filters: [
+            { fieldFilter: { field: { fieldPath: "email" }, op: "EQUAL", value: { stringValue: email } } },
+            { fieldFilter: { field: { fieldPath: "licenseKey" }, op: "EQUAL", value: { stringValue: licenseKey } } },
+            { fieldFilter: { field: { fieldPath: "url" }, op: "EQUAL", value: { stringValue: url } } },
+          ],
+        },
+      },
+      from: [{ collectionId: "licenses" }],
+      limit: 1,
+    },
+  };
+
+  const options = {
+    method: "POST",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(FIRESTORE_QUERY_URL, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+
+    if (responseCode !== 200) {
+      throw new Error(`Unable to fetch data. HTTP Status: ${responseCode}`);
+    }
+
+    const json = JSON.parse(responseText);
+    if (!json || !json[0] || !json[0].document || !json[0].document.fields) {
+      setLicenseState(false);
+      lockSystem("Access locked since your account is not active. Contact info@training4farmers@gmail.com");
+      return;
+    }
+
+    const document = json[0].document;
+    const fields = document.fields;
+    const expirationDate = fields.expirationDate.stringValue;
+    const status = fields.status.stringValue;
+    const benchmarkStatus = fields.benchmark ? fields.benchmark.stringValue : null;
+
+    const today = new Date();
+    const expDate = new Date(expirationDate.split("/").reverse().join("-"));
+    const gracePeriodEnd = new Date(expDate);
+    gracePeriodEnd.setDate(gracePeriodEnd.getDate() + 7);
+
+    // --- License checks ---
+    if (status === "Revoked") {
+      setLicenseState(false);
+      lockSystem("Your license has been revoked. Contact info@training4farmers.com");
+      return;
+    }
+
+    // 🔔 ALERT 1 HERE (about to expire)
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const daysUntilExpiration = Math.floor((expDate - today) / msPerDay);
+    if (daysUntilExpiration >= 0 && daysUntilExpiration <= 7) {
+    SpreadsheetApp.getUi().alert(
+    "Your License is about to expire (" + expirationDate + "). " +
+    "Please make sure your payment information is in order!"
+      );
+    }
+
+    if (today >= expDate) { 
+      // Expired → revoke in Firestore (status only, no data loss)
+      try {
+        const fullDocName = document.name; // e.g. projects/.../documents/licenses/{docId}
+        const docId = fullDocName.split("/").pop();
+        const updateUrl = FIRESTORE_DOCS_BASE + "/" + docId + "?updateMask.fieldPaths=status";
+        const patchPayload = { fields: { status: { stringValue: "Revoked" } } };
+
+        UrlFetchApp.fetch(updateUrl, {
+          method: "PATCH",
+          contentType: "application/json",
+          payload: JSON.stringify(patchPayload),
+          muteHttpExceptions: true,
+        });
+      } catch (e) {
+        Logger.log("Could not patch Firestore status: " + e);
+      }
+
+      setLicenseState(false);
+      lockSystem("Your license has expired. Contact info@training4farmers.com");
+      return;
+    }
+
+    if (today > gracePeriodEnd) {
+      setLicenseState(false);
+      lockSystem("Your grace period has ended. Contact info@training4farmers.com");
+      return;
+    }
+
+    // --- License valid ---
+    setLicenseState(true);
+    signInSheet.getRange("D11").setValue(expirationDate);
+
+    unlockSystem("License validated successfully! System is now unlocked.");
+
+    // --- Benchmark restrictions ---
+    handleBenchmarkAccess(activeSpreadsheet, benchmarkStatus);
+
+  } catch (error) {
+    setLicenseState(false);
+    lockSystem("Access locked since your account is not active. Contact info@training4farmers.com");
+  }
+}
+
+// BENCHMARK HANDLING
+
+function handleBenchmarkAccess(ss, benchmarkStatus) {
+  const benchmarkSheet = ss.getSheetByName("Benchmark");
+  if (!benchmarkSheet) return;
+
+  benchmarkSheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
+
+  if (benchmarkStatus !== "Yes") {
+    const protection = benchmarkSheet.protect();
+    protection.setWarningOnly(false);
+    protection.setDescription("Locked: Benchmark not available for non-premium accounts.");
+    protection.removeEditors(protection.getEditors());
+    SpreadsheetApp.getUi().alert("Access not granted to benchmarking since you are not premium.");
+  }
+}
+
+// LOCK / UNLOCK SYSTEM
+
+function lockSystem(message) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sheet => {
+    if (sheet.getName() === "Sign-in") return;
+    sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
+    const protection = sheet.protect();
+    protection.setWarningOnly(false);
+    protection.setDescription("Locked by license validation.");
+    protection.removeEditors(protection.getEditors());
+  });
+  SpreadsheetApp.getUi().alert(message);
+}
+
+function unlockSystem(message) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sheet => {
+    sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
+  });
+  SpreadsheetApp.getUi().alert(message);
+}
+
+// STATE HELPERS
+
+
+function setLicenseState(state) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const signInSheet = ss.getSheetByName("Sign-in");
+  signInSheet.getRange("Z1").setValue(state ? "Active" : "Inactive");
+}
+
+function getLicenseState() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const signInSheet = ss.getSheetByName("Sign-in");
+  return signInSheet.getRange("Z1").getValue() === "Active";
+}
+
+// TRIGGERS
+
+function createOnOpenTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const existing = triggers.find(t => t.getHandlerFunction() === "onOpenHandler");
+  if (!existing) {
+    ScriptApp.newTrigger("onOpenHandler")
+      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+      .onOpen()
+      .create();
+  }
+}
+
+function onOpenHandler() {
+  validateLicense();
+}
+
+// ENFORCE LOCKS
+
+// Prevent edits when locked
+function onEdit(e) {
+  const sheet = e.range.getSheet();
+  if (sheet.getName() === "Sign-in") return;
+  if (!getLicenseState()) {
+    SpreadsheetApp.getUi().alert("Access locked since your account is not active. Contact info@training4farmers@gmail.com");
+    e.range.setValue(e.oldValue || "");
+  }
+}
+
+// Guard scripts — always add this first line in each script
+function enforceLicenseBeforeScript(sheetName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const signIn = ss.getSheetByName("Sign-in");
+  if (!signIn) { SpreadsheetApp.getUi().alert("Sign-in sheet missing."); return false; }
+  const licenseState = String(signIn.getRange("Z1").getValue() || "").trim();
+  if (licenseState !== "Active") {
+    SpreadsheetApp.getUi().alert("Access locked since your account is not active. Contact info@training4farmers@gmail.com");
+    return false;
+  }
+  if (sheetName && sheetName === "Benchmark") {
+    const bench = String(signIn.getRange("Z2").getValue() || "No").trim();
+    if (bench.toLowerCase() !== "yes") {
+      SpreadsheetApp.getUi().alert("Access not granted to benchmarking since you are not premium.");
+      return false;
+    }
+  }
+  return true;
+}
+
+// HELPERS
+
+function parseDdMmYyyy(s) {
+  if (!s || typeof s !== 'string') return null;
+  const parts = s.split('/');
+  if (parts.length !== 3) return null;
+  const d = parseInt(parts[0],10), m = parseInt(parts[1],10), y = parseInt(parts[2],10);
+  if (isNaN(d) || isNaN(m) || isNaN(y)) return null;
+  return new Date(y, m-1, d);
+}
+
+function extractFileIdFromUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const m = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+  return m ? m[1] : null;
+}
+
+function silentLockExceptSignIn() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sheet => {
+    try {
+      if (sheet.getName() === "Sign-in") return;
+      sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
+      const p = sheet.protect();
+      p.setWarningOnly(false);
+      p.setDescription("Temporarily locked while validating license.");
+      try { p.removeEditors(p.getEditors()); } catch(e) {}
+    } catch(e) { Logger.log("silentLockExceptSignIn: " + e); }
+  });
+}
+
+
+// EXAMPLE PROTECTED SCRIPTS
+
+function renewLicense() {
+  if (!enforceLicenseBeforeScript()) return;
+  SpreadsheetApp.getUi().alert("License renewed logic would run here.");
+}
+
+function safeRunBenchmark() {
+  if (!enforceLicenseBeforeScript("Benchmark")) return;
+  SpreadsheetApp.getUi().alert("Benchmark run logic would run here.");
+}
