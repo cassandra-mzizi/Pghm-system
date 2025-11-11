@@ -70,7 +70,7 @@ function searchLitter() {
 
 // Save Litter
 function saveLitterData() {
-    enforceLicenseBeforeScript(); 
+  enforceLicenseBeforeScript(); 
    if (!getLicenseState()) {
     SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
     return;
@@ -217,7 +217,7 @@ function modifyLitter() {
 
 // Clear Litter
 function clearLitterManagementForm() {
-    enforceLicenseBeforeScript(); 
+   enforceLicenseBeforeScript(); 
     if (!getLicenseState()) {
     SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
     return;
@@ -240,7 +240,7 @@ function clearLitterManagementForm() {
 
 // Delete Litter
 function deleteLitterBasedOnID() {
-  enforceLicenseBeforeScript(); 
+ // enforceLicenseBeforeScript(); 
    if (!getLicenseState()) {
     SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
     return;
@@ -312,7 +312,7 @@ function deleteLitterBasedOnID() {
 
 
 function searchSows() {
-    enforceLicenseBeforeScript(); 
+   enforceLicenseBeforeScript(); 
    if (!getLicenseState()) {
     SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
     return;
@@ -395,130 +395,193 @@ function searchSows() {
 
 // Save Sows
 function saveSow() {
-    enforceLicenseBeforeScript(); 
-    if (!getLicenseState()) {
+  enforceLicenseBeforeScript();
+  if (!getLicenseState()) {
     SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
     return;
   }
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sourceSheet = ss.getSheetByName('Sow Management Form');
-  var targetSheet = ss.getSheetByName('Sow Management Database');
-  
-  // Get values from the source sheet
-  var dataToTransfer = [
-    sourceSheet.getRange('F13').getValue(), // SOW ID 
-    sourceSheet.getRange('I13').getValue(), // BOAR ID 
-    sourceSheet.getRange('F15').getValue(), // PARITY 
-    sourceSheet.getRange('I15').getValue(), // LITTER ID
-    sourceSheet.getRange('F17').getValue(), // MATING GROUP
-    sourceSheet.getRange('I17').getValue(), // DATE MATED
-    sourceSheet.getRange('F19').getValue(), // ACTUAL FARROWING DATE 
-    sourceSheet.getRange('I19').getValue()  // DATE WEANED 
-  ];
 
-  // Check if SOW ID and PARITY are filled
-  if (!dataToTransfer[0] || !dataToTransfer[2]) {
-    var ui = SpreadsheetApp.getUi();
-    ui.alert('Error', 'SOW ID and PARITY fields must be filled before saving.', ui.ButtonSet.OK);
-    return; // Exit the function if these fields are not filled
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const source = ss.getSheetByName('Sow Management Form');
+  const target = ss.getSheetByName('Sow Management Database');
+  const litterDB = ss.getSheetByName('Litter Management Database');
+  const ui = SpreadsheetApp.getUi();
+
+  if (!source || !target || !litterDB) {
+    ui.alert("Error", "One or more required sheets are missing.", ui.ButtonSet.OK);
+    return;
   }
 
-  // Check for duplicates in column A and C of the target sheet
-  var columnAValues = targetSheet.getRange('A:A').getValues().flat();
-  var columnCValues = targetSheet.getRange('C:C').getValues().flat();
+  // --- Read form values (trim text IDs)
+  const sowId = String(source.getRange('F13').getValue()).trim();
+  const boarId = source.getRange('I13').getValue();
+  const parity = source.getRange('F15').getValue();
+  const litterIdRaw = source.getRange('I15').getValue();
+  const litterId = litterIdRaw === '' || litterIdRaw === null ? '' : String(litterIdRaw).trim();
+  const matingGroupVal = source.getRange('F17').getValue();   // -> column E
+  const dateMatedVal = source.getRange('I17').getValue();     // -> column F
+  const actualFarrowVal = source.getRange('F19').getValue();  // -> column G
+  const dateWeanedVal = source.getRange('I19').getValue();    // -> column H
 
-  for (var i = 0; i < columnAValues.length; i++) {
-    if (columnAValues[i] === dataToTransfer[0] && columnCValues[i] === dataToTransfer[2]) {
-      var ui = SpreadsheetApp.getUi();
-      ui.alert('Error', 'Duplicate found. Data not saved.', ui.ButtonSet.OK);
-      return; // Exit the function if a duplicate is found in both columns
+  // --- Required validation
+  if (!sowId || sowId === "" || parity === "" || parity === null || parity === undefined) {
+    ui.alert("Error", "SOW ID and PARITY fields must be filled before saving.", ui.ButtonSet.OK);
+    return;
+  }
+
+  // --- Gather existing columns to check duplicates
+  const sowIDs = target.getRange('A:A').getValues().flat().map(v => String(v || "").trim());
+  const parities = target.getRange('C:C').getValues().flat(); // parity may be numeric
+  const sowLitterIDs = target.getRange('D:D').getValues().flat().map(v => String(v || "").trim());
+  const litterDBIds = litterDB.getRange('E:E').getValues().flat().map(v => String(v || "").trim());
+
+  // --- Duplicate Sow+Parity?
+  for (let i = 0; i < sowIDs.length; i++) {
+    if (sowIDs[i] === sowId && String(parities[i]) === String(parity)) {
+      ui.alert("Error", `Duplicate Sow ID + Parity found in Sow Management Database (Sow: ${sowId}, Parity: ${parity}). Data not saved.`, ui.ButtonSet.OK);
+      return;
     }
   }
 
-  // Find the next available row in column A of the target sheet
-  var nextRow = 1;
-  while (columnAValues[nextRow - 1] !== "" && nextRow <= columnAValues.length) {
-    nextRow++;
+  // --- Duplicate Litter ID checks (only if user entered a litter ID)
+  if (litterId) {
+    if (sowLitterIDs.includes(litterId)) {
+      ui.alert("Error", `Duplicate Litter ID (${litterId}) found in Sow Management Database. Data not saved.`, ui.ButtonSet.OK);
+      return;
+    }
+    if (litterDBIds.includes(litterId)) {
+      ui.alert("Error", `Duplicate Litter ID (${litterId}) found in Litter Management Database. Data not saved.`, ui.ButtonSet.OK);
+      return;
+    }
   }
 
-  // Transfer values to the next available row in the target sheet
-  targetSheet.getRange(nextRow, 1, 1, dataToTransfer.length).setValues([dataToTransfer]);
+  // --- Find next empty row in target (first empty A)
+  let nextRowIndex = sowIDs.findIndex(v => v === "" || v === null);
+  if (nextRowIndex === -1) {
+    // no empty found: append after last row
+    nextRowIndex = sowIDs.length;
+  }
+  const nextRow = nextRowIndex + 1; // convert 0-based index to 1-based row
 
-  // Display a UI alert indicating successful saving
-  var ui = SpreadsheetApp.getUi();
-  ui.alert('Success', 'Data saved successfully.', ui.ButtonSet.OK);
+  // --- Always write core required fields into A..D
+  // A = Sow Number, B = Boar Number, C = Parity, D = Litter ID
+  target.getRange(nextRow, 1).setValue(sowId);           // A
+  target.getRange(nextRow, 2).setValue(boarId);          // B
+  target.getRange(nextRow, 3).setValue(parity);          // C
+  target.getRange(nextRow, 4).setValue(litterId || "");  // D (write blank if none — optional)
+
+  // --- Conditionally write E, F, G, H only if there is a value on the form.
+  // This avoids overwriting any formula that sits in those cells.
+  // E = Mating Group  <- write only if F17 not blank
+  if (matingGroupVal !== "" && matingGroupVal !== null && matingGroupVal !== undefined) {
+    target.getRange(nextRow, 5).setValue(matingGroupVal);
+  }
+  // F = Date Mated  <- write only if I17 not blank
+  if (dateMatedVal !== "" && dateMatedVal !== null && dateMatedVal !== undefined) {
+    target.getRange(nextRow, 6).setValue(dateMatedVal);
+  }
+  // G = Actual Farrowing Date <- write only if F19 not blank
+  if (actualFarrowVal !== "" && actualFarrowVal !== null && actualFarrowVal !== undefined) {
+    target.getRange(nextRow, 7).setValue(actualFarrowVal);
+  }
+  // H = Date Weaned <- write only if I19 not blank
+  if (dateWeanedVal !== "" && dateWeanedVal !== null && dateWeanedVal !== undefined) {
+    target.getRange(nextRow, 8).setValue(dateWeanedVal);
+  }
+
+  ui.alert("Success", "Data saved successfully. For results to show, SEARCH AGAIN.", ui.ButtonSet.OK);
 }
 
 ///Modify Sows
 function modifySow() {
-  enforceLicenseBeforeScript(); 
-   if (!getLicenseState()) {
+  enforceLicenseBeforeScript();
+  if (!getLicenseState()) {
     SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
     return;
   }
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sowFormSheet = ss.getSheetByName('Sow Management Form');
-  var sowDatabaseSheet = ss.getSheetByName('Sow Management Database');
 
-  var valueF13 = sowFormSheet.getRange('F13').getValue(); // Sow ID
-  var valueF15 = sowFormSheet.getRange('F15').getValue(); // Parity
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sowFormSheet = ss.getSheetByName('Sow Management Form');
+  const sowDB = ss.getSheetByName('Sow Management Database');
+  const ui = SpreadsheetApp.getUi();
 
-  // Confirm with the user before making the change
-  var ui = SpreadsheetApp.getUi();
-  var response = ui.alert(
+  if (!sowFormSheet || !sowDB) {
+    ui.alert("Error", "One or more required sheets are missing.", ui.ButtonSet.OK);
+    return;
+  }
+
+  // --- Get form values ---
+  const sowId = String(sowFormSheet.getRange('F13').getValue()).trim();
+  const boarId = sowFormSheet.getRange('I13').getValue();
+  const parity = sowFormSheet.getRange('F15').getValue();
+  const litterIdRaw = sowFormSheet.getRange('I15').getValue();
+  const litterId = litterIdRaw ? String(litterIdRaw).trim() : "";
+  const matingGroupVal = sowFormSheet.getRange('F17').getValue();
+  const dateMatedVal = sowFormSheet.getRange('I17').getValue();
+  const actualFarrowVal = sowFormSheet.getRange('F19').getValue();
+  const dateWeanedVal = sowFormSheet.getRange('I19').getValue();
+
+  if (!sowId || sowId === "" || parity === "" || parity === null || parity === undefined) {
+    ui.alert("Error", "SOW ID and PARITY fields must be filled before modifying.", ui.ButtonSet.OK);
+    return;
+  }
+
+  // --- Confirm modification ---
+  const response = ui.alert(
     'Confirm Modification',
-    'Are you sure you want to modify the data for Sow ID (' + valueF13 + ') with Parity (' + valueF15 + ')?',
+    `Are you sure you want to modify the data for Sow ID (${sowId}) with Parity (${parity})?`,
     ui.ButtonSet.YES_NO
   );
-
-  // If the user chooses "No", cancel the operation
   if (response !== ui.Button.YES) {
     ui.alert('Modification Cancelled', 'No changes have been made.', ui.ButtonSet.OK);
     return;
   }
 
-  // Find the matching row in the database
-  var lastRow = sowDatabaseSheet.getLastRow();
-  var columnAData = sowDatabaseSheet.getRange('A1:A' + lastRow).getValues().flat();
-  var columnCData = sowDatabaseSheet.getRange('C1:C' + lastRow).getValues().flat();
+  // --- Find matching row ---
+  const lastRow = sowDB.getLastRow();
+  const sowIDs = sowDB.getRange('A1:A' + lastRow).getValues().flat().map(v => String(v || "").trim());
+  const parities = sowDB.getRange('C1:C' + lastRow).getValues().flat();
 
-  var foundRowIndex = -1;
-
-  for (var i = 0; i < columnAData.length; i++) {
-    if (columnAData[i] === valueF13 && columnCData[i] === valueF15) {
-      foundRowIndex = i + 1; // Adding 1 to convert from 0-based index to 1-based row number
-      break;
-    }
+  const foundRowIndex = sowIDs.findIndex((id, i) => id === sowId && String(parities[i]) === String(parity));
+  if (foundRowIndex === -1) {
+    ui.alert('Error', 'No matching data found in the Sow Management Database. Modification failed.', ui.ButtonSet.OK);
+    return;
   }
 
-  if (foundRowIndex !== -1) {
-    // Overwrite matching row with values from the form
-    sowDatabaseSheet.getRange(foundRowIndex, 1, 1, 8).setValues([[
-      valueF13,                                        // A: Sow ID
-      sowFormSheet.getRange('I13').getValue(),         // B: Boar ID
-      valueF15,                                        // C: Parity
-      sowFormSheet.getRange('I15').getValue(),         // D: Litter ID
-      sowFormSheet.getRange('F17').getValue(),         // E: Mating Group
-      sowFormSheet.getRange('I17').getValue(),         // F: Date Mated
-      sowFormSheet.getRange('F19').getValue(),         // G: Actual Farrowing Date
-      sowFormSheet.getRange('I19').getValue()          // H: Date Weaned
-    ]]);
+  const rowNum = foundRowIndex + 1;
 
-    // Show UI alert for successful modification
-    ui.alert(
-      'Modification Success',
-      'Data for Sow ID (' + valueF13 + ') with Parity (' + valueF15 + ') has been modified successfully.\nFor results to show, SEARCH AGAIN.\nPlease remember that if you placed data under "Date Weaned",and or "Actual Farrowing Date" to please tranfer the data using the Transfer to Litter button. Or you can use yor Litter ID to change the litter infromation.',
-      ui.ButtonSet.OK
-    );
-  } else {
-    // If no match found, display an error alert
-    SpreadsheetApp.getUi().alert('Error', 'No matching data found in the database. Modification failed.', SpreadsheetApp.getUi().ButtonSet.OK);
+  // --- Update values safely ---
+  sowDB.getRange(rowNum, 1).setValue(sowId);          // A: Sow ID
+  sowDB.getRange(rowNum, 2).setValue(boarId);         // B: Boar ID
+  sowDB.getRange(rowNum, 3).setValue(parity);         // C: Parity
+  sowDB.getRange(rowNum, 4).setValue(litterId || ""); // D: Litter ID
+
+  // Only update if value is NOT blank (preserve formulas)
+  if (matingGroupVal !== "" && matingGroupVal !== null && matingGroupVal !== undefined) {
+    sowDB.getRange(rowNum, 5).setValue(matingGroupVal); // E: Mating Group
   }
+  if (dateMatedVal !== "" && dateMatedVal !== null && dateMatedVal !== undefined) {
+    sowDB.getRange(rowNum, 6).setValue(dateMatedVal);   // F: Date Mated
+  }
+  if (actualFarrowVal !== "" && actualFarrowVal !== null && actualFarrowVal !== undefined) {
+    sowDB.getRange(rowNum, 7).setValue(actualFarrowVal); // G: Actual Farrowing Date
+  }
+  if (dateWeanedVal !== "" && dateWeanedVal !== null && dateWeanedVal !== undefined) {
+    sowDB.getRange(rowNum, 8).setValue(dateWeanedVal);   // H: Date Weaned
+  }
+
+  // --- Success message ---
+  ui.alert(
+    "Modification Success",
+    `Data for Sow ID (${sowId}) with Parity (${parity}) has been modified successfully.\n\nFor results to show, SEARCH AGAIN.\n\nIf you added 'Date Weaned' or 'Actual Farrowing Date', please transfer litter data using the 'Transfer to Litter' button or use your Litter ID to update litter information.`,
+    ui.ButtonSet.OK
+  );
 }
+
 
 // Clear Sow Form
 function clearSowManagementForm() {
-  enforceLicenseBeforeScript(); 
+ enforceLicenseBeforeScript(); 
  if (!getLicenseState()) {
     SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
     return;
@@ -1137,7 +1200,7 @@ function getOrdinal(day) {
 
 
 function generateMonthlyReporting() {
-  enforceLicenseBeforeScript(); 
+ // enforceLicenseBeforeScript(); 
 /* LICENSE CHECK */
   if (!getLicenseState()) {
     SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
@@ -1367,3 +1430,5 @@ function getOrdinal(day) {
 /* ----------------------------------------------------------------------- */
 
 
+
+// End
