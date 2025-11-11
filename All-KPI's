@@ -4,23 +4,21 @@
 
 function updateKPI1_LittersPerSowPerYear() {
   const ss = SpreadsheetApp.getActive();
-
   const LMD_SHEET_NAME = 'Litter Management Database';
   const BENCH_SHEET_NAME = 'Benchmark';
 
   const lmd = ss.getSheetByName(LMD_SHEET_NAME);
   const bench = ss.getSheetByName(BENCH_SHEET_NAME);
-  if (!lmd) throw new Error('Sheet "Litter Management Database" not found.');
-  if (!bench) throw new Error('Sheet "Benchmark" not found.');
+  if (!lmd || !bench) throw new Error('Sheet not found.');
 
   const HEADER_ROW = 1;
-  const START_ROW = 2;                // first data row
-  const START_COL = 2;                // column B
-  const NUM_COLS = 18;                // B..S
+  const START_ROW = 2;
+  const START_COL = 2;  // B
+  const NUM_COLS = 18;
 
   const lastRow = lmd.getLastRow();
   if (lastRow < START_ROW) {
-    bench.getRange('D6').setValue('—');
+    bench.getRange('D6:I6').setValue('—');
     return;
   }
 
@@ -28,25 +26,16 @@ function updateKPI1_LittersPerSowPerYear() {
   const headers = lmd.getRange(HEADER_ROW, START_COL, 1, NUM_COLS).getValues()[0];
   const data = lmd.getRange(START_ROW, START_COL, lastRow - START_ROW + 1, NUM_COLS).getValues();
 
-  // Find column indices by header names
   const IDX_SOW = headers.indexOf("Sow Number");
   const IDX_DOB = headers.indexOf("D.O.B");
+  if (IDX_SOW === -1 || IDX_DOB === -1) throw new Error('Required columns missing.');
 
-  if (IDX_SOW === -1) throw new Error('"Sow Number" column not found in Litter Management Database.');
-  if (IDX_DOB === -1) throw new Error('"D.O.B" column not found in Litter Management Database.');
-
-  // Collect farrowing dates by sow
+  // Collect farrowing dates per sow
   const farrowingsBySow = {};
   for (const row of data) {
-    const sowCell = row[IDX_SOW];
-    const dobCell = row[IDX_DOB];
-
-    if (!sowCell || !dobCell) continue;
-
-    const sowId = String(sowCell).trim();
-    const dob = normalizeDate(dobCell);
+    const sowId = String(row[IDX_SOW]).trim();
+    const dob = normalizeDate(row[IDX_DOB]);
     if (!sowId || !dob) continue;
-
     if (!farrowingsBySow[sowId]) farrowingsBySow[sowId] = [];
     farrowingsBySow[sowId].push(dob);
   }
@@ -55,8 +44,8 @@ function updateKPI1_LittersPerSowPerYear() {
   const perSowLPY = [];
   for (const [sowId, dates] of Object.entries(farrowingsBySow)) {
     if (dates.length < 2) continue;
-
     dates.sort((a, b) => a - b);
+
     const gaps = [];
     for (let i = 1; i < dates.length; i++) {
       const days = (dates[i] - dates[i - 1]) / 86400000;
@@ -66,17 +55,31 @@ function updateKPI1_LittersPerSowPerYear() {
 
     const avgIFP = gaps.reduce((a, b) => a + b, 0) / gaps.length;
     const lpy = 365 / avgIFP;
-    perSowLPY.push(lpy);
+    perSowLPY.push({ sowId, value: lpy });
   }
 
-  // Herd average
-  const herdLPY = perSowLPY.length > 0 
-    ? perSowLPY.reduce((a, b) => a + b, 0) / perSowLPY.length 
-    : 0;
+  if (perSowLPY.length === 0) {
+    bench.getRange('D6:I6').setValue('—');
+    return;
+  }
 
-  // Write to Benchmark!D8
-  bench.getRange('D6').setValue(herdLPY).setNumberFormat('0.00');
+  // ✅ Calculate herd average
+  const herdLPY = perSowLPY.reduce((sum, s) => sum + s.value, 0) / perSowLPY.length;
+
+  // Write average explicitly
+  bench.getRange('D6').setValue(herdLPY).setNumberFormat('0.0');
+
+  // ✅ Rank sows
+  perSowLPY.sort((a, b) => b.value - a.value); // higher is better
+
+  const best = perSowLPY.slice(0, 3).map(s => s.sowId).join(", "); 
+  const worst = perSowLPY.slice(-3).map(s => s.sowId).join(", "); 
+ 
+  bench.getRange('H6').setValue(best || "—"); 
+  bench.getRange('I6').setValue(worst || "—");
 }
+
+
  //Robustly convert assorted cell contents to a Date or return null.
 
 function normalizeDate(value) {
@@ -112,57 +115,241 @@ function normalizeDate(value) {
 // KPI 2 — Total pigs born per litter - D7
 
 function calculateTotalPigsBornPerLitter() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
-  const totalBorn = sheet.getRange("G2:G" + sheet.getLastRow()).getValues().flat().filter(Number);
+   const ss = SpreadsheetApp.getActive();
+  const LMD_SHEET_NAME = "Litter Management Database";
+  const BENCH_SHEET_NAME = "Benchmark";
 
-  if (totalBorn.length === 0) return;
+  const lmd = ss.getSheetByName(LMD_SHEET_NAME);
+  const bench = ss.getSheetByName(BENCH_SHEET_NAME);
+  if (!lmd || !bench) throw new Error("Sheet not found.");
 
-  const avgBorn = totalBorn.reduce((a, b) => a + b, 0) / totalBorn.length;
+  const lastRow = lmd.getLastRow();
+  if (lastRow < 2) {
+    bench.getRange("D7").setValue('—');
+    bench.getRange("H7").setValue('—');
+    bench.getRange("I7").setValue('—');
+    return;
+  }
 
-  SpreadsheetApp.getActiveSpreadsheet()
-    .getSheetByName("Benchmark")
-    .getRange("D7").setValue(avgBorn.toFixed(2));
+  // --- Global litter-average (match original behaviour) ---
+  // Read all values in column G (Total born)
+  const rawTotals = lmd.getRange(2, 7, lastRow - 1, 1).getValues().flat(); // column G = 7
+  // Mimic filter(Number): remove empty / non-numeric / zero (falsy) entries
+  const totalNums = rawTotals
+    .map(v => {
+      // keep numeric strings too
+      if (v === null || v === undefined || v === '') return NaN;
+      const n = Number(v);
+      return isNaN(n) ? NaN : n;
+    })
+    .filter(n => !isNaN(n) && n !== 0); // exclude zeros to match filter(Number) behaviour
+
+  if (totalNums.length === 0) {
+    bench.getRange("D7").setValue('—');
+  } else {
+    const globalAvg = totalNums.reduce((a, b) => a + b, 0) / totalNums.length;
+    bench.getRange("D7").setValue(globalAvg).setNumberFormat('0');
+  }
+
+  // --- Per-sow averages for ranking (H7 / I7) ---
+  // Read Sow IDs (col B) and Total Born (col G)
+  const sowIds = lmd.getRange(2, 2, lastRow - 1, 1).getValues().flat(); // column B = 2
+  const totals = rawTotals; // we already read G2:G
+
+  const perSow = {};
+  for (let i = 0; i < sowIds.length; i++) {
+    const sidRaw = sowIds[i];
+    const valRaw = totals[i];
+    if (sidRaw === null || sidRaw === undefined || String(sidRaw).trim() === '') continue;
+    const sowId = String(sidRaw).trim();
+    const num = Number(valRaw);
+    if (isNaN(num)) continue; // skip non-numeric
+    // do include zeros here if you want them counted for sow-average; adjust if not
+    if (!perSow[sowId]) perSow[sowId] = [];
+    perSow[sowId].push(num);
+  }
+
+  const perSowAverages = Object.entries(perSow).map(([sowId, arr]) => {
+    const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+    return { sowId, value: avg, count: arr.length };
+  });
+
+  if (perSowAverages.length === 0) {
+    bench.getRange("H7").setValue('—');
+    bench.getRange("I7").setValue('—');
+    return;
+  }
+
+  // Sort descending (higher total born per litter = better)
+  perSowAverages.sort((a, b) => b.value - a.value);
+
+  const best3 = perSowAverages.slice(0, 3).map(s => s.sowId).join(", ");
+  const worst3 = perSowAverages.slice(-3).map(s => s.sowId).join(", ");
+
+  bench.getRange("H7").setValue(best3 || "—");
+  bench.getRange("I7").setValue(worst3 || "—");
 }
+
 
 // KPI 3 — Pigs born alive per litter - D8 
 
 function calculatePigsBornAlivePerLitter() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
-  const bornAlive = sheet.getRange("J2:J" + sheet.getLastRow()).getValues().flat().filter(Number);
+  const ss = SpreadsheetApp.getActive();
+  const LMD_SHEET_NAME = "Litter Management Database";
+  const BENCH_SHEET_NAME = "Benchmark";
 
-  if (bornAlive.length === 0) return;
+  const lmd = ss.getSheetByName(LMD_SHEET_NAME);
+  const bench = ss.getSheetByName(BENCH_SHEET_NAME);
+  if (!lmd || !bench) throw new Error("Sheet not found.");
 
-  const avgAlive = bornAlive.reduce((a, b) => a + b, 0) / bornAlive.length;
+  const lastRow = lmd.getLastRow();
+  if (lastRow < 2) {
+    bench.getRange("D8").setValue('—');
+    bench.getRange("H8").setValue('—');
+    bench.getRange("I8").setValue('—');
+    return;
+  }
 
-  SpreadsheetApp.getActiveSpreadsheet()
-    .getSheetByName("Benchmark")
-    .getRange("D8").setValue(avgAlive.toFixed(2));
+  // --- Global litter-average (match your old code) ---
+  // J = Born Alive (col 10)
+  const rawAlive = lmd.getRange(2, 10, lastRow - 1, 1).getValues().flat();
+
+  // Mimic filter(Number): remove empty/non-numeric/zero
+  const aliveNums = rawAlive
+    .map(v => {
+      if (v === null || v === undefined || v === '') return NaN;
+      const n = Number(v);
+      return isNaN(n) ? NaN : n;
+    })
+    .filter(n => !isNaN(n) && n !== 0);
+
+  if (aliveNums.length === 0) {
+    bench.getRange("D8").setValue('—');
+  } else {
+    const avgAlive = aliveNums.reduce((a, b) => a + b, 0) / aliveNums.length;
+    bench.getRange("D8").setValue(avgAlive).setNumberFormat('0');
+  }
+
+  // --- Per-sow averages for ranking ---
+  const sowIds = lmd.getRange(2, 2, lastRow - 1, 1).getValues().flat(); // B = Sow Number
+  const perSow = {};
+
+  for (let i = 0; i < sowIds.length; i++) {
+    const sidRaw = sowIds[i];
+    const valRaw = rawAlive[i];
+    if (!sidRaw || String(sidRaw).trim() === '') continue;
+    const sowId = String(sidRaw).trim();
+    const num = Number(valRaw);
+    if (isNaN(num)) continue;
+    if (!perSow[sowId]) perSow[sowId] = [];
+    perSow[sowId].push(num);
+  }
+
+  const perSowAverages = Object.entries(perSow).map(([sowId, arr]) => {
+    const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+    return { sowId, value: avg };
+  });
+
+  if (perSowAverages.length === 0) {
+    bench.getRange("H8").setValue('—');
+    bench.getRange("I8").setValue('—');
+    return;
+  }
+
+  // Sort descending (more pigs born alive is better)
+  perSowAverages.sort((a, b) => b.value - a.value);
+
+  const best3 = perSowAverages.slice(0, 3).map(s => s.sowId).join(", ");
+  const worst3 = perSowAverages.slice(-3).map(s => s.sowId).join(", ");
+
+  bench.getRange("H8").setValue(best3 || "—");
+  bench.getRange("I8").setValue(worst3 || "—");
 }
+
 
 // KPI 4 — Pre-weaning mortality - D9
- function calculatePreWeaningMortality() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Litter Management Database");
-  const totalBorn = sheet.getRange("G2:G" + sheet.getLastRow()).getValues().flat().filter(Number);
-  const numberWeaned = sheet.getRange("M2:M" + sheet.getLastRow()).getValues().flat().filter(Number);
 
-  if (totalBorn.length === 0 || numberWeaned.length === 0) return;
+function calculatePreWeaningMortality() {
+  const ss = SpreadsheetApp.getActive();
+  const LMD_SHEET_NAME = "Litter Management Database";
+  const BENCH_SHEET_NAME = "Benchmark";
 
-  const bornSum = totalBorn.reduce((a, b) => a + b, 0);
-  const weanedSum = numberWeaned.reduce((a, b) => a + b, 0);
-  const mortality = ((bornSum - weanedSum) / bornSum) * 100;
+  const lmd = ss.getSheetByName(LMD_SHEET_NAME);
+  const bench = ss.getSheetByName(BENCH_SHEET_NAME);
+  if (!lmd || !bench) throw new Error("Required sheet not found.");
 
-  SpreadsheetApp.getActiveSpreadsheet()
-    .getSheetByName("Benchmark")
-    .getRange("D9").setValue(mortality.toFixed(2) + "%");
+  const lastRow = lmd.getLastRow();
+  if (lastRow < 2) {
+    bench.getRange("D9").setValue("—");
+    bench.getRange("H9").setValue("—");
+    bench.getRange("I9").setValue("—");
+    return;
+  }
+
+  // Columns: B = Sow Number (2), G = Total Born (7), H = Dead (8), I = Mummified (9)
+  const sowIds = lmd.getRange(2, 2, lastRow - 1, 1).getValues().flat();
+  const totalBornVals = lmd.getRange(2, 7, lastRow - 1, 1).getValues().flat();
+  const deadVals = lmd.getRange(2, 8, lastRow - 1, 1).getValues().flat();
+  const mummifiedVals = lmd.getRange(2, 9, lastRow - 1, 1).getValues().flat();
+
+  // --- Herd-wide mortality ---
+  const bornNums = totalBornVals.map(Number).filter(v => !isNaN(v) && v > 0);
+  const deadNums = deadVals.map(Number).filter(v => !isNaN(v));
+  const mummifiedNums = mummifiedVals.map(Number).filter(v => !isNaN(v));
+
+  const bornSum = bornNums.reduce((a, b) => a + b, 0);
+  const deadSum = deadNums.reduce((a, b) => a + b, 0);
+  const mummifiedSum = mummifiedNums.reduce((a, b) => a + b, 0);
+
+  const mortality = bornSum > 0 ? ((deadSum + mummifiedSum) / bornSum) * 100 : 0;
+  bench.getRange("D9").setValue(mortality).setNumberFormat('0.0"%"');
+
+  // --- Per-sow mortality ---
+  const perSow = {};
+  for (let i = 0; i < sowIds.length; i++) {
+    const sidRaw = sowIds[i];
+    const born = Number(totalBornVals[i]);
+    const dead = Number(deadVals[i]);
+    const mummified = Number(mummifiedVals[i]);
+
+    if (!sidRaw || isNaN(born) || born <= 0) continue;
+
+    const sowId = String(sidRaw).trim();
+    if (!perSow[sowId]) perSow[sowId] = { born: 0, dead: 0, mummified: 0 };
+
+    perSow[sowId].born += born;
+    perSow[sowId].dead += isNaN(dead) ? 0 : dead;
+    perSow[sowId].mummified += isNaN(mummified) ? 0 : mummified;
+  }
+
+  const perSowMortality = Object.entries(perSow).map(([sowId, obj]) => {
+    const m = ((obj.dead + obj.mummified) / obj.born) * 100;
+    return { sowId, value: m };
+  });
+
+  if (perSowMortality.length === 0) {
+    bench.getRange("H9").setValue("—");
+    bench.getRange("I9").setValue("—");
+    return;
+  }
+
+  // Best = lowest mortality, Worst = highest mortality
+  perSowMortality.sort((a, b) => a.value - b.value);
+
+  const best3 = perSowMortality.slice(0, 3).map(s => `${s.sowId} (${s.value.toFixed(1)}%)`).join("\n");
+  const worst3 = perSowMortality.slice(-3).map(s => `${s.sowId} (${s.value.toFixed(1)}%)`).join("\n");
+
+  bench.getRange("H9").setValue(best3 || "—");
+  bench.getRange("I9").setValue(worst3 || "—");
 }
 
-// KPI 5 — Weaned pigs per sow per year - D10
-  // (depends on KPI 1, 3, and 4 already being updated)
+
+
+// KPI 5 — Weaned pigs per sow per year - D10 (depends on KPI 1, 3, and 4 already being updated)
 
 function updateKPI5_WeanedPigsPerSowPerYear() {
   const ss = SpreadsheetApp.getActive();
 
-  // ----- Sheets -----
   const LMD_SHEET_NAME = 'Litter Management Database';
   const BENCH_SHEET_NAME = 'Benchmark';
 
@@ -170,67 +357,93 @@ function updateKPI5_WeanedPigsPerSowPerYear() {
   const bench = ss.getSheetByName(BENCH_SHEET_NAME);
   if (!lmd || !bench) throw new Error('Required sheet not found.');
 
-  // ----- Fixed layout in LMD: columns B:S -----
-  // B = Sow Number
-  // F = D.O.B
-  // J = Born Alive
-  // M = Number Weaned
-  const HEADER_ROW = 1;
   const START_ROW = 2;
   const START_COL = 2;   // B
   const NUM_COLS = 18;   // B..S
 
-  const IDX_SOW = 0;     // B relative to B
-  const IDX_DOB = 4;     // F relative to B
-  const IDX_BORN_ALIVE = 8; // J relative to B
-  const IDX_WEANED = 11; // M relative to B
+  const IDX_SOW = 0;        // B relative to B
+  const IDX_BORN_ALIVE = 8; // J
+  const IDX_WEANED = 11;    // M
 
   const lastRow = lmd.getLastRow();
   if (lastRow < START_ROW) {
-    bench.getRange('D12').setValue('—');
+    bench.getRange('D10').setValue('—');
+    bench.getRange('H10').setValue('—');
+    bench.getRange('I10').setValue('—');
     return;
   }
 
   const numRows = lastRow - START_ROW + 1;
   const data = lmd.getRange(START_ROW, START_COL, numRows, NUM_COLS).getValues();
 
-  // ----- Collect weaned pigs -----
-  let totalWeaned = 0;
-  let totalLitters = 0;
-
+  // --- Aggregate by sow ---
+  const perSow = {};
   for (const row of data) {
-    const bornAlive = parseFloat(row[IDX_BORN_ALIVE]);
-    const weaned = parseFloat(row[IDX_WEANED]);
+    const sowIdRaw = row[IDX_SOW];
+    const weanedRaw = row[IDX_WEANED];
+    const bornAliveRaw = row[IDX_BORN_ALIVE];
 
-    if (!isNaN(bornAlive) && !isNaN(weaned) && bornAlive > 0 && weaned >= 0) {
-      totalWeaned += weaned;
-      totalLitters++;
-    }
+    if (!sowIdRaw || isNaN(weanedRaw) || isNaN(bornAliveRaw) || bornAliveRaw <= 0) continue;
+
+    const sowId = String(sowIdRaw).trim();
+    const weaned = Number(weanedRaw);
+
+    if (!perSow[sowId]) perSow[sowId] = { totalWeaned: 0, litters: 0 };
+    perSow[sowId].totalWeaned += weaned;
+    perSow[sowId].litters++;
   }
 
-  if (totalLitters === 0) {
+  // --- Calculate herd avg ---
+  let herdTotalWeaned = 0;
+  let herdTotalLitters = 0;
+  for (const s of Object.values(perSow)) {
+    herdTotalWeaned += s.totalWeaned;
+    herdTotalLitters += s.litters;
+  }
+
+  if (herdTotalLitters === 0) {
     bench.getRange('D10').setValue('—');
     return;
   }
 
-  const avgWeanedPerLitter = totalWeaned / totalLitters;
+  const avgWeanedPerLitter = herdTotalWeaned / herdTotalLitters;
+  const littersPerSowPerYear = parseFloat(bench.getRange('D6').getValue()) || 0;
 
-  // ----- Get Litters per sow per year from Benchmark!D8 -----
-  const littersPerSowPerYear = parseFloat(bench.getRange('D8').getValue()) || 0;
+  const herdWeanedPerSowPerYear = avgWeanedPerLitter * littersPerSowPerYear;
 
-  // ----- Calculate KPI -----
-  const weanedPerSowPerYear = avgWeanedPerLitter * littersPerSowPerYear;
+  // --- Write herd avg to D10 ---
+  bench.getRange('D10').setValue(herdWeanedPerSowPerYear).setNumberFormat('0');
 
-  // ----- Write result -----
-  bench.getRange('D10').setValue(weanedPerSowPerYear).setNumberFormat('0.00');
+  // --- Per-sow performance ---
+  const perSowPerf = Object.entries(perSow).map(([sowId, obj]) => {
+    const avgWeaned = obj.totalWeaned / obj.litters;
+    const weanedPerYear = avgWeaned * littersPerSowPerYear;
+    return { sowId, value: weanedPerYear };
+  });
+
+  // --- Rank best/worst ---
+  perSowPerf.sort((a, b) => b.value - a.value);
+
+ /* const best3 = perSowPerf.slice(0, 3).map(s => `${s.sowId} (${s.value.toFixed(1)})`).join(", ");
+  const worst3 = perSowPerf.slice(-3).map(s => `${s.sowId} (${s.value.toFixed(1)})`).join(", ");
+
+  bench.getRange('H10').setValue(best3 || "—");
+  bench.getRange('I10').setValue(worst3 || "—");
+  */
+  const best3 = perSowPerf.slice(0, 3).map(s => `${s.sowId} (${s.value.toFixed(1)})`).join("\n");
+  const worst3 = perSowPerf.slice(-3).map(s => `${s.sowId} (${s.value.toFixed(1)})`).join("\n");
+
+  bench.getRange('H10').setValue(best3 || "—").setWrap(true);   
+  bench.getRange('I10').setValue(worst3 || "—").setWrap(true);
+
 }
+
 
 // KPI 6 — Farrowing rate - D11
 
 function updateKPI6_FarrowingRate() {
   const ss = SpreadsheetApp.getActive();
 
-  // ----- Sheets -----
   const SMD_SHEET_NAME = 'Sow Management Database';
   const BENCH_SHEET_NAME = 'Benchmark';
 
@@ -238,41 +451,69 @@ function updateKPI6_FarrowingRate() {
   const bench = ss.getSheetByName(BENCH_SHEET_NAME);
   if (!smd || !bench) throw new Error('Required sheet not found.');
 
-  // ----- Layout -----
-  // F = Date Mated (index 5 since A=0)
-  // G = Actual Farrowing Date (index 6)
-  const HEADER_ROW = 1;
   const START_ROW = 2;
   const START_COL = 1;   // A
   const NUM_COLS = 31;   // A..AE
 
-  const IDX_MATED = 5;
-  const IDX_FARROWED = 6;
+  const IDX_SOW = 1;       // B = Sow Number (A=0 → B=1)
+  const IDX_MATED = 5;     // F
+  const IDX_FARROWED = 6;  // G
 
   const lastRow = smd.getLastRow();
   if (lastRow < START_ROW) {
     bench.getRange('D11').setValue('—');
+    bench.getRange('H11').setValue('—');
+    bench.getRange('I11').setValue('—');
     return;
   }
 
   const numRows = lastRow - START_ROW + 1;
   const data = smd.getRange(START_ROW, START_COL, numRows, NUM_COLS).getValues();
 
-  let matings = 0;
-  let farrowings = 0;
+  const perSow = {};
+  let totalMatings = 0, totalFarrowings = 0;
 
   for (const row of data) {
+    const sowId = row[IDX_SOW];
     const mated = normalizeDate(row[IDX_MATED]);
     const farrowed = normalizeDate(row[IDX_FARROWED]);
 
-    if (mated) matings++;       // count all matings
-    if (farrowed) farrowings++; // count all farrowings
+    if (!sowId) continue;
+    const id = String(sowId).trim();
+
+    if (!perSow[id]) perSow[id] = { matings: 0, farrowings: 0 };
+
+    if (mated) {
+      perSow[id].matings++;
+      totalMatings++;
+    }
+    if (farrowed) {
+      perSow[id].farrowings++;
+      totalFarrowings++;
+    }
   }
 
-  const rate = matings > 0 ? (farrowings / matings) * 100 : 0;
+  const herdRate = totalMatings > 0 ? (totalFarrowings / totalMatings) * 100 : 0;
+  bench.getRange('D11').setValue(herdRate).setNumberFormat('0.0"%"');
 
-  // ----- Write result -----
-  bench.getRange('D11').setValue(rate).setNumberFormat('0.00"%"');
+  // per-sow rates
+  const perf = Object.entries(perSow)
+    .filter(([id, v]) => v.matings > 0)
+    .map(([id, v]) => ({ sowId: id, value: (v.farrowings / v.matings) * 100 }));
+
+  if (perf.length === 0) {
+    bench.getRange('H11').setValue('—');
+    bench.getRange('I11').setValue('—');
+    return;
+  }
+
+  perf.sort((a, b) => b.value - a.value);
+
+  const best3 = perf.slice(0, 3).map(s => `${s.sowId} (${s.value.toFixed(1)}%)`).join("\n");
+  const worst3 = perf.slice(-3).map(s => `${s.sowId} (${s.value.toFixed(1)}%)`).join("\n");
+
+  bench.getRange('H11').setValue(best3 || "—");
+  bench.getRange('I11').setValue(worst3 || "—");
 }
 
 function normalizeDate(value) {
@@ -309,8 +550,6 @@ function normalizeDate(value) {
 
 function updateKPI7NonProductiveSowDays() {
   const ss = SpreadsheetApp.getActive();
-
-  // ----- Sheets -----
   const SMD_SHEET_NAME = 'Sow Management Database';
   const BENCH_SHEET_NAME = 'Benchmark';
 
@@ -318,11 +557,11 @@ function updateKPI7NonProductiveSowDays() {
   const bench = ss.getSheetByName(BENCH_SHEET_NAME);
   if (!smd || !bench) throw new Error('Required sheet not found.');
 
-  // ----- Layout -----
   const HEADER_ROW = 1;
   const START_ROW = 2;
 
   // Columns by letter
+  const COL_SOW = "B";
   const COL_MATED = "F";
   const COL_FARROWED = "G";
   const COL_WEANED = "H";
@@ -334,42 +573,69 @@ function updateKPI7NonProductiveSowDays() {
   }
 
   // Get values
+  const sows = smd.getRange(`${COL_SOW}${START_ROW}:${COL_SOW}${lastRow}`).getValues().flat();
   const matings = smd.getRange(`${COL_MATED}${START_ROW}:${COL_MATED}${lastRow}`).getValues().flat();
   const farrowings = smd.getRange(`${COL_FARROWED}${START_ROW}:${COL_FARROWED}${lastRow}`).getValues().flat();
   const weanings = smd.getRange(`${COL_WEANED}${START_ROW}:${COL_WEANED}${lastRow}`).getValues().flat();
 
   let intervals = [];
+  let sowIntervals = {}; // store intervals per sow for top/bottom
 
-  for (let i = 0; i < matings.length; i++) {
+  for (let i = 0; i < sows.length; i++) {
+    const sowId = sows[i];
     const mated = normalizeDate(matings[i]);
     const farrowed = normalizeDate(farrowings[i]);
     const weaned = normalizeDate(weanings[i]);
 
+    let interval = null;
+
     // Case 1: Weaned -> Next Mating
     if (weaned && mated && mated > weaned) {
-      intervals.push((mated - weaned) / 86400000);
+      interval = (mated - weaned) / 86400000;
     }
 
     // Case 2: Mating failed -> Next Mating (no farrow, but later mating)
-    if (mated && !farrowed) {
-      // Look ahead for next mating
+    if (!interval && mated && !farrowed) {
       for (let j = i + 1; j < matings.length; j++) {
         const nextMating = normalizeDate(matings[j]);
         if (nextMating && nextMating > mated) {
-          intervals.push((nextMating - mated) / 86400000);
+          interval = (nextMating - mated) / 86400000;
           break;
         }
       }
     }
+
+    if (interval !== null && interval >= 0) {
+      intervals.push(interval);
+      if (!sowIntervals[sowId]) sowIntervals[sowId] = [];
+      sowIntervals[sowId].push(interval);
+    }
   }
 
+  // Calculate average
   const avgNPD = intervals.length > 0
     ? intervals.reduce((a, b) => a + b, 0) / intervals.length
     : 0;
 
-  // ----- Write result -----
-  bench.getRange("D12").setValue(avgNPD).setNumberFormat("0.00");
+  bench.getRange("D12").setValue(avgNPD).setNumberFormat('0');
+
+  // Calculate top 3 and worst 3 per-sow average
+  const perSowAvg = Object.entries(sowIntervals).map(([sowId, arr]) => {
+    const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+    return { sowId, avg };
+  });
+
+  perSowAvg.sort((a, b) => b.avg - a.avg); // descending for worst first
+
+  const worst3 = perSowAvg.slice(0, 3).map(o => o.sowId).join(", ");
+  const best3 = perSowAvg.slice(-3).map(o => o.sowId).join(", ");
+
+  // Write to columns H and I
+  bench.getRange("H12").setValue(best3);  // best performing
+  bench.getRange("I12").setValue(worst3); // worst performing
 }
+
+// normalizeDate function
 function normalizeDate(value) {
   if (value instanceof Date && !isNaN(value)) return value;
 
@@ -414,14 +680,15 @@ function calculateInterFarrowingPeriods() {
 
   let sowData = {};
   let allIntervals = [];
+  let sowIntervals = {}; // For top/bottom 3
 
-  data.forEach((row, i) => {
-    let sowId = row[0];
-    let parity = row[2];
-    let farrowDate = row[6];
+  data.forEach((row) => {
+    const sowId = row[0];
+    const parity = row[2];
+    const farrowDate = row[6];
 
     if (sowId && parity && farrowDate) {
-      let dateObj = (farrowDate instanceof Date) ? farrowDate : new Date(farrowDate);
+      const dateObj = (farrowDate instanceof Date) ? farrowDate : new Date(farrowDate);
       if (!isNaN(dateObj)) {
         if (!sowData[sowId]) sowData[sowId] = [];
         sowData[sowId].push({ parity: Number(parity), farrowDate: dateObj });
@@ -429,41 +696,46 @@ function calculateInterFarrowingPeriods() {
     }
   });
 
-  for (let sowId in sowData) {
+  for (const sowId in sowData) {
     if (sowData[sowId].length < 2) continue; // skip if only one farrowing
-
-    // Sort by parity
     sowData[sowId].sort((a, b) => a.parity - b.parity);
 
     for (let i = 1; i < sowData[sowId].length; i++) {
-      let prevDate = sowData[sowId][i - 1].farrowDate;
-      let currDate = sowData[sowId][i].farrowDate;
-
-      // Days difference
-      let diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
+      const prevDate = sowData[sowId][i - 1].farrowDate;
+      const currDate = sowData[sowId][i].farrowDate;
+      const diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
 
       if (diffDays > 0) {
         allIntervals.push(diffDays);
-        Logger.log(
-          "Sow " + sowId +
-          " parity " + sowData[sowId][i - 1].parity +
-          " → " + sowData[sowId][i].parity +
-          " = " + diffDays.toFixed(2) + " days"
-        );
+
+        if (!sowIntervals[sowId]) sowIntervals[sowId] = [];
+        sowIntervals[sowId].push(diffDays);
       }
     }
   }
 
-  let herdAvg = allIntervals.length > 0
+  // Herd average
+  const herdAvg = allIntervals.length > 0
     ? allIntervals.reduce((a, b) => a + b, 0) / allIntervals.length
     : 0;
 
-  Logger.log("All intervals: " + allIntervals);
-  Logger.log("Herd Average Inter-Farrowing Period: " + herdAvg.toFixed(2));
+  // Calculate per-sow average intervals
+  const perSowAvg = Object.entries(sowIntervals).map(([sowId, arr]) => {
+    const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+    return { sowId, avg };
+  });
 
+  // Sort for top/bottom 3
+  perSowAvg.sort((a, b) => a.avg - b.avg); // ascending: shorter = better
+  const best3 = perSowAvg.slice(0, 3).map(o => o.sowId).join(", ");
+  const worst3 = perSowAvg.slice(-3).map(o => o.sowId).join(", ");
+
+  // Write results
   const benchmarkSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Benchmark");
   if (benchmarkSheet) {
-    benchmarkSheet.getRange("D13").setValue(herdAvg).setNumberFormat("0.00");
+    benchmarkSheet.getRange("D13").setValue(herdAvg).setNumberFormat('0');
+    benchmarkSheet.getRange("H13").setValue(best3);   // top 3
+    benchmarkSheet.getRange("I13").setValue(worst3);  // bottom 3
   }
 }
 
@@ -486,30 +758,49 @@ function updateDaysToSlaughter() {
   const lastRow = sheet.getLastRow();
   if (lastRow < START_ROW) {
     bench.getRange("D14").setValue("—");
+    bench.getRange("H14").setValue("—");
+    bench.getRange("I14").setValue("—");
     return;
   }
 
   const dobs = sheet.getRange(`${COL_DOB}${START_ROW}:${COL_DOB}${lastRow}`).getValues().flat();
   const killedDates = sheet.getRange(`${COL_KILLED}${START_ROW}:${COL_KILLED}${lastRow}`).getValues().flat();
+  const sowIds = sheet.getRange(`B${START_ROW}:B${lastRow}`).getValues().flat(); // assuming B = Sow Number
 
-  let totalDays = 0;
-  let count = 0;
+  let daysArray = [];
 
   for (let i = 0; i < dobs.length; i++) {
     const dob = normalizeDate(dobs[i]);
     const killed = normalizeDate(killedDates[i]);
+    const sowId = sowIds[i];
     if (dob && killed && killed >= dob) {
       const days = (killed - dob) / 86400000;
-      totalDays += days;
-      count++;
+      daysArray.push({ sowId, days });
     }
   }
 
-  const avgDTS = count > 0 ? totalDays / count : 0;
+  if (daysArray.length === 0) {
+    bench.getRange("D14").setValue("—");
+    bench.getRange("H14").setValue("—");
+    bench.getRange("I14").setValue("—");
+    return;
+  }
 
-  bench.getRange("D14").setValue(avgDTS).setNumberFormat("0.0"); // Rounded to 1 decimal
+  // Herd average
+  const avgDTS = daysArray.reduce((sum, obj) => sum + obj.days, 0) / daysArray.length;
+  bench.getRange("D14").setValue(avgDTS).setNumberFormat('0');
+
+  // Sort for top/bottom 3
+  daysArray.sort((a, b) => a.days - b.days); // ascending: fastest = best
+
+  const top3 = daysArray.slice(0, 3).map(o => o.sowId).join(", ");
+  const bottom3 = daysArray.slice(-3).map(o => o.sowId).join(", ");
+
+  bench.getRange("H14").setValue(top3);   // fastest 3
+  bench.getRange("I14").setValue(bottom3); // slowest 3
 }
 
+// reuse your normalizeDate function
 function normalizeDate(value) {
   if (value instanceof Date && !isNaN(value)) return value;
 
@@ -518,6 +809,542 @@ function normalizeDate(value) {
     const d = new Date(ms);
     return isNaN(d) ? null : d;
   }
+
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    if (!s || s === '-' || s.includes('out') || s.includes('foster')) return null;
+
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      const d = parseInt(m[1], 10);
+      const mo = parseInt(m[2], 10) - 1;
+      let y = parseInt(m[3], 10);
+      if (y < 100) y += 2000;
+      const dt = new Date(y, mo, d);
+      return isNaN(dt) ? null : dt;
+    }
+
+    const dt = new Date(value);
+    return isNaN(dt) ? null : dt;
+  }
+
+  return null;
+}
+
+// === HELPER FUNCTIONS ===
+
+// Compare KPIs (D6:D14 vs E6:E14) and write traffic-light circles into F6:F14
+function compareKPIs() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("Benchmark");
+  if (!sheet) throw new Error('Benchmark sheet not found.');
+
+  const START_ROW = 6;
+  const END_ROW = 14;
+  const COL_NAME = 1;   // A
+  const COL_VALUE = 4;  // D
+  const COL_TARGET = 5; // E
+  const COL_STATUS = 6; // F
+
+  // default KPI names in case sheet rows are empty or moved
+  const defaultNames = [
+    "Litters per sow per year",
+    "Total pigs born per litter",
+    "Pigs born alive per litter",
+    "Pre-weaning mortality (%)",
+    "Weaned pigs per sow per year",
+    "Farrowing rate (%)",
+    "Non-productive sow days",
+    "Inter Farrowing period",
+    "Days-to-slaughter"
+  ];
+
+  // Helpers
+  const normalizeDash = s => String(s || '').replace(/[–—−]/g, '-').replace(/\u00A0/g, ' ').trim();
+  const extractNumbers = s => {
+    if (s === null || s === undefined) return [];
+    const m = String(s).match(/-?\d+(\.\d+)?/g);
+    return m ? m.map(x => parseFloat(x)) : [];
+  };
+
+  // Decide KPI "type" by name keywords
+  const detectType = (name) => {
+    const n = String(name || '').toLowerCase();
+    if (n.includes("pre-weaning") || n.includes("pre weaning") || n.includes("pre-wean") || n.includes("prewean") || n.includes("preweaning")) return 'upper_limit';
+    if (n.includes("non-productive") || n.includes("non productive") || n.includes("nonproductive")) return 'upper_limit';
+    if (n.includes("inter farrowing") || n.includes("inter-farrowing") || n.includes("interfarrowing")) return 'range_strict';
+    if (n.includes("days-to-slaughter") || n.includes("days to slaughter") || n.includes("days to slaughter")) return 'days_pref_lower';
+    // otherwise default to higher-is-better range
+    return 'range_with_excellent_above';
+  };
+
+  const out = [];
+
+  for (let r = 0; r <= END_ROW - START_ROW; r++) {
+    const row = START_ROW + r;
+
+    // Read displayed target (getDisplayValue to capture formatting/dashes as shown)
+    const rawName = sheet.getRange(row, COL_NAME).getDisplayValue() || defaultNames[r] || '';
+    const rawValCell = sheet.getRange(row, COL_VALUE).getValue();
+    const rawTarget = sheet.getRange(row, COL_TARGET).getDisplayValue() || '';
+
+    const name = String(rawName).trim();
+    let val = rawValCell;
+
+    // Determine if target contains '%' (treat values as percents)
+    const targetHasPercent = /%/.test(rawTarget);
+
+    // Normalize numeric actual if necessary:
+    // If actual is a string with '%', parse it; if it's a fractional number (<=1) but target has %, scale to 0..100
+    if (typeof val === 'string') {
+      const s = val.replace('%', '').trim();
+      const p = parseFloat(s);
+      val = isNaN(p) ? NaN : p;
+      if (String(rawValCell).includes('%')) {
+        // e.g. "21.29%" -> 21.29
+      } else if (targetHasPercent && !String(rawValCell).includes('%')) {
+        // if target uses percent but value is a small fraction, scale if <=1
+        if (!isNaN(val) && Math.abs(val) <= 1) val = val * 100;
+      }
+    } else if (typeof val === 'number') {
+      // numeric cell
+      if (targetHasPercent && Math.abs(val) <= 1) {
+        // treat as fraction if target expects percent
+        val = val * 100;
+      }
+    } else {
+      val = parseFloat(String(val).replace('%','').trim());
+      if (targetHasPercent && !isNaN(val) && Math.abs(val) <= 1) val = val * 100;
+    }
+
+    if (isNaN(val)) {
+      out.push(['—']);
+      continue;
+    }
+
+    // Normalize target text
+    const cleaned = normalizeDash(rawTarget); // converts other dashes to '-' and trims
+    const cleanedNoSpaces = cleaned.replace(/\s+/g, ' ');
+
+    // Determine KPI type by name
+    const type = detectType(name);
+
+    let status = '🔴 Poor';
+
+    // 1) Upper-limit format like "< 13%" or "<13"
+    if (/^\s*<\s*\d+/.test(cleanedNoSpaces)) {
+      const nums = extractNumbers(cleanedNoSpaces);
+      const limit = nums.length ? nums[0] : NaN;
+      if (!isNaN(limit)) {
+        if (val <= 0.5 * limit) status = '🟣 Excellent';
+        else if (val <= limit) status = '🟢 Good';
+        else if (val <= 1.2 * limit) status = '🟠 Average';
+        else status = '🔴 Poor';
+      } else {
+        status = '—';
+      }
+    }
+
+    // 2) Range format: "min - max"
+    else if (/[0-9]+(\.\d+)?\s*-\s*[0-9]+(\.\d+)?/.test(cleanedNoSpaces)) {
+      // make a clean "min-max" without spaces/different dash forms
+      const cleanRange = cleanedNoSpaces.replace(/\s*-\s*/, '-');
+      const parts = cleanRange.split('-').map(x => parseFloat(x)).filter(x => !isNaN(x));
+      if (parts.length >= 2) {
+        const min = parts[0];
+        const max = parts[1];
+
+        if (type === 'range_with_excellent_above') {
+          if (val >= max) status = '🟣 Excellent';
+          else if (val >= min) status = '🟢 Good';
+          else {
+            const ratio = val / min;
+            if (ratio >= 0.90) status = '🟠 Average';
+            else status = '🔴 Poor';
+          }
+        }
+        else if (type === 'upper_limit') {
+          // fallback if someone wrote a range for an upper_limit KPI
+          if (val <= min) status = '🟣 Excellent';
+          else if (val <= max) status = '🟢 Good';
+          else if (val <= max * 1.2) status = '🟠 Average';
+          else status = '🔴 Poor';
+        }
+        else if (type === 'range_strict') {
+          // strict in-range is Good; slightly outside (within 5%) -> Average; else Poor
+          if (val >= min && val <= max) status = '🟢 Good';
+          else if (val >= min * 0.95 && val <= max * 1.05) status = '🟠 Average';
+          else status = '🔴 Poor';
+        }
+        else if (type === 'days_pref_lower') {
+          // Special Days-to-slaughter behaviour you asked for:
+          if (val < 0) status = '🔴 Poor';
+          else if (val < min) {
+            if (val >= 100) status = '🟣 Excellent'; // below min but still >=100 -> Excellent
+            else status = '🟠 Average';             // too low (unrealistic) -> Average
+          } else if (val <= max) status = '🟢 Good';
+          else status = '🔴 Poor';
+        }
+      } else {
+        status = '—';
+      }
+    }
+
+    // 3) If target didn't match patterns, attempt numeric fallback
+    else {
+      const nums = extractNumbers(cleanedNoSpaces);
+      if (nums.length === 1) {
+        // single numeric target -> treat as lower bound (higher is better)
+        const targetNum = nums[0];
+        if (type === 'upper_limit') {
+          if (val <= 0.5 * targetNum) status = '🟣 Excellent';
+          else if (val <= targetNum) status = '🟢 Good';
+          else if (val <= targetNum * 1.2) status = '🟠 Average';
+          else status = '🔴 Poor';
+        } else {
+          // default treat as goal (higher is better)
+          if (val >= targetNum) status = '🟣 Excellent';
+          else if (val >= 0.9 * targetNum) status = '🟠 Average';
+          else status = '🔴 Poor';
+        }
+      } else {
+        status = '—';
+      }
+    }
+
+    out.push([status]);
+  }
+
+  // Write statuses to column F
+  sheet.getRange(START_ROW, COL_STATUS, out.length, 1).setValues(out);
+  SpreadsheetApp.flush();
+}
+
+// Recommendations  
+
+function generateRecommendations() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("Benchmark");
+  if (!sheet) throw new Error("Benchmark sheet not found.");
+
+  const START_ROW = 6;
+  const END_ROW = 14;
+  const COL_NAME = 1;   // A
+  const COL_VALUE = 4;  // D
+  const COL_STATUS = 6; // F
+  const COL_RECOMM = 7; // G
+
+  const numRows = END_ROW - START_ROW + 1;
+  const data = sheet.getRange(START_ROW, COL_NAME, numRows, 6).getValues();
+
+  // --- Each KPI gets its own article link ---
+  const articleLinks = [
+    "https://docs.google.com/document/d/ARTICLE1/view?usp=sharing",
+    "https://docs.google.com/document/d/ARTICLE2/view?usp=sharing",
+    "https://docs.google.com/document/d/ARTICLE3/view?usp=sharing",
+    "https://docs.google.com/document/d/ARTICLE4/view?usp=sharing",
+    "https://docs.google.com/document/d/ARTICLE5/view?usp=sharing",
+    "https://docs.google.com/document/d/ARTICLE6/view?usp=sharing",
+    "https://docs.google.com/document/d/ARTICLE7/view?usp=sharing",
+    "https://docs.google.com/document/d/ARTICLE8/view?usp=sharing",
+    "https://docs.google.com/document/d/ARTICLE9/view?usp=sharing",
+  ];
+
+  const consultation = "https://yourwebsite.com/book-consultation"; // update to your site
+
+  for (let i = 0; i < data.length; i++) {
+    const [name, , , val, , statusRaw] = data[i];
+    const status = String(statusRaw || "").trim();
+
+    let rec = "";
+
+    // --- Build recommendation text ---
+    if (/excellent/i.test(status)) {
+      rec = "You're very well above industry standards. Fantastic job!";
+    } 
+    else if (/good/i.test(status)) {
+      rec = "You're well above industry standards. Keep it up!";
+    } 
+    else if (/average/i.test(status)) {
+      rec = `You are on par with industry standards. \nTo further improve and become more efficient and profitable, we suggest you do Topic 4 of our Comprehensive Pigfarming Course:  https://www.training4farmers.com/pig-farming-course`;
+    } 
+    else if (/poor/i.test(status)) {
+      rec = `Don't be discouraged. Numbers can initially be low when starting your piggery or when swopping out new breeding stock. To improve your efficiencies and profitability, strongly consider doing our Comprehensive Pigfarming Course:  www.training4farmers.com
+    (Or at the very least do Topic 4 of our course)`;
+    } 
+    else {
+      rec = "No data available for this KPI.";
+    }
+
+    // --- Write text to cell ---
+    const cell = sheet.getRange(START_ROW + i, COL_RECOMM);
+    cell.setValue(rec);
+
+    // --- Add hyperlink for “Article X” text ---
+    const rich = cell.getRichTextValue();
+    if (rich) {
+      const text = rich.copy().build();
+      const textStr = text.getText();
+      const articleLabel = `Article ${i + 1}`;
+      const start = textStr.indexOf(articleLabel);
+      if (start !== -1) {
+        const end = start + articleLabel.length;
+        const newRich = SpreadsheetApp.newRichTextValue()
+          .setText(textStr)
+          .setTextStyle(SpreadsheetApp.newTextStyle().setFontSize(11).build())
+          .setLinkUrl(start, end, link)
+          .build();
+        cell.setRichTextValue(newRich);
+      } else {
+        // fallback if keyword not found
+        const newRich = SpreadsheetApp.newRichTextValue()
+          .setText(textStr)
+          .setTextStyle(SpreadsheetApp.newTextStyle().setFontSize(11).build())
+          .build();
+        cell.setRichTextValue(newRich);
+      }
+    } else {
+      // default if cell didn't return a rich text object
+      const newRich = SpreadsheetApp.newRichTextValue()
+        .setText(rec)
+        .setTextStyle(SpreadsheetApp.newTextStyle().setFontSize(11).build())
+        .build();
+      cell.setRichTextValue(newRich);
+    }
+  }
+
+  SpreadsheetApp.getUi().alert("✅ Recommendations generated successfully.\n \nNote that if you have just started your piggery or have changed some of your stock. Your numbers might show as underperforming. It can take a while for you to be on industry standards dont be alarmed by this.");
+}
+
+// Clear KPI's
+
+function clearBenchmark() {
+    enforceLicenseBeforeScript(); 
+    if (!getLicenseState()) {
+    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
+    return;
+  }
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var litterFormSheet = ss.getSheetByName("Benchmark");
+
+  var cellsToClear = [
+    "D6","D7","D8","D9","D10","D11","D12","D13","D14", 
+    "F6","F7","F8","F9","F10","F11","F12","F13","F14",
+    "G6","G7","G8","G9","G10","G11","G12","G13","G14",
+    "H6","H7","H8","H9","H10","H11","H12","H13","H14",
+    "I6","I7","I8","I9","I10","I11","I12","I13","I14"
+  ];
+
+  cellsToClear.forEach(function (cellRange) {
+    litterFormSheet.getRange(cellRange).clearContent();
+  });
+
+  return true;
+}
+
+// PDF 
+
+function generateBenchmarkPDF() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("Benchmark");
+  const ui = SpreadsheetApp.getUi();
+  if (!sheet) return ui.alert("Sheet 'Benchmark' not found.");
+
+  const userChoice = ui.alert(
+    "Generate Benchmark Report?",
+    "Would you like to generate the Benchmark PDF report now?",
+    ui.ButtonSet.YES_NO
+  );
+  if (userChoice === ui.Button.NO) return ui.alert("Thank you for using the Benchmarking System.");
+
+  // Optional license check
+  try {
+    if (typeof enforceLicenseBeforeScript === "function") enforceLicenseBeforeScript();
+    if (typeof getLicenseState === "function" && !getLicenseState()) {
+      ui.alert("License is not active. Please validate your license.");
+      return;
+    }
+  } catch (e) {}
+
+  const headerRow = 5;
+  const startRow = headerRow + 1;
+  const lastRow = sheet.getLastRow();
+  const numRows = lastRow - startRow + 1;
+  if (numRows <= 0) return ui.alert("No KPI data found below the header row.");
+
+  const colKPI = 3; // C
+  const range = sheet.getRange(startRow, colKPI, numRows, 7);
+  const values = range.getDisplayValues();
+  const richValues = range.getRichTextValues();
+
+  // Create Doc
+  const today = new Date();
+  const headingDate = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(today);
+  const doc = DocumentApp.create(`Benchmark Report - ${headingDate}`);
+  const body = doc.getBody();
+
+  body.appendParagraph("Benchmark Report")
+    .setAlignment(DocumentApp.HorizontalAlignment.CENTER)
+    .setFontSize(22).setBold(true);
+  body.appendParagraph(headingDate)
+    .setAlignment(DocumentApp.HorizontalAlignment.CENTER)
+    .setFontSize(12);
+  body.appendParagraph("");
+  body.appendParagraph("This report contains KPI values, targets, status, and recommendations from the Benchmark sheet.")
+    .setFontSize(11).setSpacingAfter(8);
+
+  // Table
+  const headers = ["KPI", "Your Current Value", "Target", "Status", "Recommendation", "Best Sows", "Worst Sows"];
+  const table = body.appendTable();
+  const hr = table.appendTableRow();
+  headers.forEach(h => {
+    const c = hr.appendTableCell(h);
+    c.setBackgroundColor("#e6e6e6").setBold(true).setFontSize(11)
+      .setVerticalAlignment(DocumentApp.VerticalAlignment.CENTER)
+      .setPaddingTop(4).setPaddingBottom(4);
+  });
+
+  // Rows
+  values.forEach((row, rIdx) => {
+    if (!row[0]) return;
+    const tr = table.appendTableRow();
+    row.forEach((cellVal, cIdx) => {
+      const cell = tr.appendTableCell();
+      cell.setVerticalAlignment(DocumentApp.VerticalAlignment.CENTER)
+          .setPaddingTop(2).setPaddingBottom(2).setPaddingLeft(4).setPaddingRight(4);
+      const para = cell.appendParagraph("");
+      const textEl = para.editAsText().setFontSize(11);
+      const text = cellVal || "—";
+
+      // Recommendation column only (index 4 of 7)
+      if (cIdx === 4) {
+        const rich = richValues[rIdx][cIdx];
+        if (rich) {
+          const richText = rich.getText() || "";
+          textEl.setText(richText);
+
+          // Go through text runs safely
+          const runs = rich.getRuns();
+          runs.forEach(run => {
+            const start = run.getStartIndex();
+            const end = run.getEndIndex();
+            if (start < 0 || end < 0) return; // skip invalid
+            const url = rich.getLinkUrl(start, end);
+            if (url) {
+              // Apply same range link in doc text
+              textEl.setLinkUrl(start, end, url);
+            }
+          });
+        } else {
+          textEl.setText(text);
+        }
+      } else {
+        textEl.setText(text);
+      }
+    });
+  });
+
+  // Save and convert to PDF
+  doc.saveAndClose();
+  const pdfBlob = DriveApp.getFileById(doc.getId()).getAs(MimeType.PDF)
+    .setName(`Benchmark Report - ${headingDate}.pdf`);
+
+  // Folder structure
+  let reportFolder = DriveApp.getFoldersByName("Report");
+  reportFolder = reportFolder.hasNext() ? reportFolder.next() : DriveApp.createFolder("Report");
+  let benchmarkFolder = reportFolder.getFoldersByName("Benchmark");
+  benchmarkFolder = benchmarkFolder.hasNext() ? benchmarkFolder.next() : reportFolder.createFolder("Benchmark");
+
+  const pdfFile = benchmarkFolder.createFile(pdfBlob);
+  DriveApp.getFileById(doc.getId()).setTrashed(true);
+
+  // UI message with clickable link
+  const html = HtmlService.createHtmlOutput(
+    `<p><b>✅ Benchmark PDF generated successfully!</b></p>
+     <p>File: <code>${pdfFile.getName()}</code><br>
+     Location: <b>Report / Benchmark</b></p>
+     <p><a href="${pdfFile.getUrl()}" target="_blank">📄 Click here to open the PDF</a></p>`
+  ).setWidth(400).setHeight(200);
+  ui.showModalDialog(html, "Benchmark Report Created");
+}
+
+
+function updateKPIs() {
+  const ui = SpreadsheetApp.getUi();
+
+  // 🪄 Lightweight popup that appears instantly
+  const html = HtmlService.createHtmlOutput(`
+    <div style="font-family:Google Sans, Arial, sans-serif; padding:16px; text-align:center;">
+      <h3 style="margin-top:0;">🐷 Benchmarking in Progress</h3>
+      <p>Initializing, please wait...</p>
+      <p style="font-size:12px; color:#555;">
+        Please do not close this sheet or click other buttons while benchmarking runs.
+      </p>
+      <script>
+        // Failsafe auto-close in 10 minutes
+        setTimeout(() => google.script.host.close(), 10 * 60 * 1000);
+      </script>
+    </div>
+  `).setWidth(360).setHeight(160);
+
+  ui.showModelessDialog(html, "Benchmarking in Progress");
+
+  try {
+    enforceLicenseBeforeScript();
+
+    const ss = SpreadsheetApp.getActive();
+    ss.toast("Calculating KPI 1...");
+    updateKPI1_LittersPerSowPerYear();
+
+    ss.toast("Calculating KPI 2...");
+    calculateTotalPigsBornPerLitter();
+
+    ss.toast("Calculating KPI 3...");
+    calculatePigsBornAlivePerLitter();
+
+    ss.toast("Calculating KPI 4...");
+    calculatePreWeaningMortality();
+
+    ss.toast("Calculating KPI 5...");
+    updateKPI5_WeanedPigsPerSowPerYear();
+
+    ss.toast("Calculating KPI 6...");
+    updateKPI6_FarrowingRate();
+
+    ss.toast("Calculating KPI 7...");
+    updateKPI7NonProductiveSowDays();
+
+    ss.toast("Calculating KPI 8...");
+    calculateInterFarrowingPeriods();
+
+    ss.toast("Calculating KPI 9...");
+    updateDaysToSlaughter();
+
+    ss.toast("Comparing KPIs...");
+    compareKPIs();
+
+    ss.toast("Generating Recommendations...");
+    generateRecommendations();
+
+    ss.toast("Creating PDF...");
+    // This may show an alert with YES/NO
+    generateBenchmarkPDF();
+
+  } catch (e) {
+    ui.alert("⚠️ Error during benchmarking", e.message || e, ui.ButtonSet.OK);
+  } finally {
+    // ✅ Always close the popup safely, regardless of user choice or errors
+    const closeHtml = HtmlService.createHtmlOutput("<script>google.script.host.close();</script>");
+    ui.showModelessDialog(closeHtml, " "); // use a space instead of empty string to avoid error
+  }
+
+  // ✅ Final confirmation alert
+  ui.alert(
+    "✅ Benchmarking Complete",
+    "All KPI calculations and recommendations have been processed.",
+    ui.ButtonSet.OK
+  );
+}
 
   if (typeof value === 'string') {
     const s = value.trim().toLowerCase();
