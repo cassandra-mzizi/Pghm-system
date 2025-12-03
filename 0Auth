@@ -1,0 +1,278 @@
+// Firestore config
+const FIRESTORE_PROJECT = 'pig-herd-management-admin';
+const FIRESTORE_CONFIG_DOC = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT}/databases/(default)/documents/config/server`;
+
+// License cache (10 seconds)
+let _licenseCache = {
+  timestamp: 0,
+  data: null
+};
+
+// Cached server url
+let _serverUrlCache = null;
+
+// Get license server url from firestore config doc
+function getLicenseServerUrl() {
+  try {
+    if (_serverUrlCache) return _serverUrlCache;
+    const res = UrlFetchApp.fetch(FIRESTORE_CONFIG_DOC, { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return null;
+    const data = JSON.parse(res.getContentText());
+    const url = data.fields?.licenseServerUrl?.stringValue?.trim();
+    if (!url) return null;
+    _serverUrlCache = url;
+    return url;
+  } catch (e) {
+    Logger.log('server url fetch error: ' + e);
+    return null;
+  }
+}
+
+// Main license enforcement function
+function enforceLicenseBeforeScript(sheetName) {
+  const now = Date.now();
+
+  // Check cache first
+  if (_licenseCache.data && (now - _licenseCache.timestamp < 10000)) {
+    const cached = _licenseCache.data;
+    if (sheetName === 'Benchmark' && cached.benchmark !== 'Yes') {
+      SpreadsheetApp.getUi().alert('Benchmarking is restricted to premium users.');
+      throw new Error('Benchmark access denied (cached)');
+    }
+    return true;
+  }
+
+  // Fetch from firestore (document query)
+  const licenseData = fetchLicenseFromFirestore();
+
+  // Update cache
+  _licenseCache.timestamp = now;
+  _licenseCache.data = licenseData;
+
+  // Benchmark restriction check
+  if (sheetName === 'Benchmark' && licenseData.benchmark !== 'Yes') {
+    SpreadsheetApp.getUi().alert('Benchmarking is restricted to premium users.');
+    throw new Error('Benchmark access denied');
+  }
+
+  return true;
+}
+
+// Fetch license record from firestore using structured query
+function fetchLicenseFromFirestore() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  const signIn = ss.getSheetByName('Sign-in');
+
+  if (!signIn) throw new Error('sign-in sheet missing');
+
+  const email = String(signIn.getRange('D5').getValue()).trim();
+  const licenseKey = String(signIn.getRange('D8').getValue()).trim();
+  const sheetUrl = ss.getUrl();
+
+  if (!email || !licenseKey) {
+    ui.alert('please enter email and license key.');
+    throw new Error('missing license info');
+  }
+
+  const payload = {
+    structuredQuery: {
+      where: {
+        compositeFilter: {
+          op: 'AND',
+          filters: [
+            { fieldFilter: { field: { fieldPath: 'email' }, op: 'EQUAL', value: { stringValue: email } } },
+            { fieldFilter: { field: { fieldPath: 'licenseKey' }, op: 'EQUAL', value: { stringValue: licenseKey } } },
+            { fieldFilter: { field: { fieldPath: 'url' }, op: 'EQUAL', value: { stringValue: sheetUrl } } }
+          ]
+        }
+      },
+      from: [{ collectionId: 'licenses' }],
+      limit: 1
+    }
+  };
+
+  const response = UrlFetchApp.fetch(
+    'https://firestore.googleapis.com/v1/projects/pig-herd-management-admin/databases/(default)/documents:runQuery',
+    {
+      method: 'post',
+      contentType: 'application/json',
+      muteHttpExceptions: true,
+      payload: JSON.stringify(payload)
+    }
+  );
+
+  const code = response.getResponseCode();
+  if (code !== 200) {
+    ui.alert('unable to validate license. try again later.');
+    throw new Error('firestore error ' + code);
+  }
+
+  const data = JSON.parse(response.getContentText());
+  if (!data || !data[0] || !data[0].document) {
+    ui.alert('invalid license. contact info@training4farmers.com');
+    throw new Error('license not found');
+  }
+
+  const fields = data[0].document.fields;
+  const status = fields.status.stringValue;
+  const expiration = fields.expirationDate.stringValue;
+  const benchmark = fields.benchmark ? fields.benchmark.stringValue : 'No';
+
+  // Expiration check (expects dd/mm/yyyy or similar)
+  const expParts = expiration.split('/');
+  const expIso = expParts.length === 3 ? `${expParts[2]}-${expParts[1]}-${expParts[0]}` : expiration;
+  const expDate = new Date(expIso);
+  if (new Date() > expDate) {
+    ui.alert('your license has expired. contact info@training4farmers.com');
+    throw new Error('license expired');
+  }
+
+  // status check
+  if (status !== 'Active') {
+    ui.alert('your license is inactive or revoked.');
+    throw new Error('license inactive');
+  }
+
+  return {
+    status: status,
+    expiration: expiration,
+    benchmark: benchmark
+  };
+}
+
+// Validate license using backend server (optional alternative)
+function validateLicense() {
+  createOnOpenTrigger();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const signIn = ss.getSheetByName('Sign-in');
+  if (!signIn) return SpreadsheetApp.getUi().alert('sign-in sheet not found.');
+
+  const email = String(signIn.getRange('D5').getValue()).trim();
+  const licenseKey = String(signIn.getRange('D8').getValue()).trim();
+  const sheetUrl = ss.getUrl();
+
+  if (!email || !licenseKey) return SpreadsheetApp.getUi().alert('please enter both email and license key.');
+
+  const backendUrl = getLicenseServerUrl();
+  const payload = JSON.stringify({ email, licenseKey, sheetUrl });
+
+  try {
+    const response = UrlFetchApp.fetch(backendUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      payload,
+      muteHttpExceptions: true
+    });
+
+    const code = response.getResponseCode();
+    const text = response.getContentText();
+
+    if (code !== 200) throw new Error('license server unreachable');
+    const result = JSON.parse(text);
+
+    if (!result.valid) {
+      lockSystem('license invalid or not found. contact info@training4farmers.com');
+      return;
+    }
+
+    const status = result.status || 'Revoked';
+    const benchmark = result.benchmark || 'No';
+    const expDate = result.expirationDate || '';
+
+    if (status !== 'Active') {
+      lockSystem('your license is not active or has been revoked. contact info@training4farmers.com');
+      return;
+    }
+
+    unlockSystem('license validated successfully. expires ' + expDate);
+    handleBenchmarkAccess(ss, benchmark);
+
+  } catch (err) {
+    Logger.log('license validation error: ' + err);
+    lockSystem('could not reach license server. please try again later.');
+  }
+}
+
+// Enforce benchmark access (locks the benchmark sheet if needed)
+function handleBenchmarkAccess(ss, benchmarkStatus) {
+  const sheet = ss.getSheetByName('Benchmark');
+  if (!sheet) return;
+  sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
+  if (benchmarkStatus !== 'Yes') {
+    const p = sheet.protect();
+    p.setWarningOnly(false);
+    p.setDescription('locked: benchmark not available for non-premium accounts.');
+    p.removeEditors(p.getEditors());
+    SpreadsheetApp.getUi().alert('benchmarking is not available for this license.');
+  }
+}
+
+// Lock all sheets except sign-in
+function lockSystem(message) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sh => {
+    if (sh.getName() === 'Sign-in') return;
+    sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
+    const prot = sh.protect();
+    prot.setWarningOnly(false);
+    prot.setDescription('locked by license validation.');
+    prot.removeEditors(prot.getEditors());
+  });
+  SpreadsheetApp.getUi().alert(message);
+}
+
+// Remove protections from all sheets
+function unlockSystem(message) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sh => {
+    sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
+  });
+  SpreadsheetApp.getUi().alert(message);
+}
+
+// Create onOpen trigger once
+function createOnOpenTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  if (!triggers.some(t => t.getHandlerFunction() === 'onOpenHandler')) {
+    ScriptApp.newTrigger('onOpenHandler')
+      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+      .onOpen()
+      .create();
+  }
+}
+
+// onOpen handler to validate license
+function onOpenHandler() {
+  validateLicense();
+}
+
+// Example function that client can call via LicenseLib.clearBenchmark()
+function clearBenchmark() {
+  enforceLicenseBeforeScript('Benchmark');
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName('Benchmark');
+  if (!sh) throw new Error('benchmark sheet missing');
+  // Clear a reasonable range without touching z cell specifically
+  sh.getRange('A2:AA999').clearContent();
+}
+
+// Example updateKPIs function that client can call via LicenseLib.updateKPIs()
+function updateKPIs() {
+  enforceLicenseBeforeScript('KPIs');
+  // add your KPI update logic here
+}
+
+// Wrapper to run a named function after license check
+function runWithLicenseCheck(fnName, sheetName) {
+  try {
+    enforceLicenseBeforeScript(sheetName || '');
+    if (typeof this[fnName] === 'function') {
+      this[fnName]();
+    } else {
+      throw new Error('function not found: ' + fnName);
+    }
+  } catch (err) {
+    SpreadsheetApp.getUi().alert(err.message);
+  }
+}
