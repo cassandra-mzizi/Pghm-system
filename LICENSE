@@ -1,132 +1,21 @@
-// === DYNAMIC LICENSE VALIDATION CLIENT (NO Z CELLS) ===
+MIT License
 
-// FIRESTORE CONFIG
-const FIRESTORE_PROJECT = 'pig-herd-management-admin';
-const FIRESTORE_CONFIG_DOC = `https://firestore.googleapis.com/v1/projects/${FIRESTORE_PROJECT}/databases/(default)/documents/config/server`;
+Copyright (c) 2025 Cassandra-Mzizi
 
-//Get backend URL dynamically from Firestore
-function getLicenseServerUrl() {
-  try {
-    const res = UrlFetchApp.fetch(FIRESTORE_CONFIG_DOC, { muteHttpExceptions: true });
-    if (res.getResponseCode() !== 200) throw new Error(`HTTP ${res.getResponseCode()}`);
-    const data = JSON.parse(res.getContentText());
-    const urlField = data.fields?.licenseServerUrl?.stringValue?.trim();
-    if (!urlField) throw new Error('licenseServerUrl not found');
-    return urlField;
-  } catch (err) {
-    Logger.log(`⚠️ Config fetch error: ${err}`);
-    // Optional fallback if config unavailable
-  }
-}
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-//Validate license using backend
-function validateLicense() {
-  createOnOpenTrigger();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const signIn = ss.getSheetByName('Sign-in');
-  if (!signIn) return SpreadsheetApp.getUi().alert('Sign-in sheet not found.');
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-  const email = String(signIn.getRange('D5').getValue()).trim();
-  const licenseKey = String(signIn.getRange('D8').getValue()).trim();
-  const sheetUrl = ss.getUrl();
-
-  if (!email || !licenseKey)
-    return SpreadsheetApp.getUi().alert('Please enter both email and license key.');
-
-  const backendUrl = getLicenseServerUrl();
-  Logger.log(`Fetched license server URL: ${backendUrl}`);
-
-  const payload = JSON.stringify({ email, licenseKey, sheetUrl });
-  Logger.log(`Payload: ${payload}`);
-
-  try {
-    const response = UrlFetchApp.fetch(backendUrl, {
-      method: 'post',
-      contentType: 'application/json',
-      payload,
-      muteHttpExceptions: true,
-    });
-
-    const code = response.getResponseCode();
-    const text = response.getContentText();
-    Logger.log(`License server HTTP ${code} → ${text}`);
-
-    if (code !== 200) throw new Error('License server unreachable');
-    const result = JSON.parse(text);
-
-    if (!result.valid) {
-      lockSystem('License invalid or not found. Contact info@training4farmers.com');
-      return;
-    }
-
-    // 🔍 Status logic
-    const status = result.status || 'Revoked';
-    const benchmark = result.benchmark || 'No';
-    const expDate = result.expirationDate || '';
-
-    if (status !== 'Active') {
-      lockSystem('Your license is not active or has been revoked. Contact info@training4farmers.com');
-      return;
-    }
-
-    // ✅ License active
-    unlockSystem(`License validated successfully. Expires ${expDate}`);
-    handleBenchmarkAccess(ss, benchmark);
-
-  } catch (err) {
-    Logger.log(`License validation error: ${err}`);
-    lockSystem('Could not reach license server. Please try again later.');
-  }
-}
-
-//Benchmark restriction
-function handleBenchmarkAccess(ss, benchmarkStatus) {
-  const sheet = ss.getSheetByName('Benchmark');
-  if (!sheet) return;
-  sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
-
-  if (benchmarkStatus !== 'Yes') {
-    const p = sheet.protect();
-    p.setWarningOnly(false);
-    p.setDescription('Locked: Benchmark not available for non-premium accounts.');
-    p.removeEditors(p.getEditors());
-    SpreadsheetApp.getUi().alert('Benchmarking is not available for this license.');
-  }
-}
-
-//Lock & Unlock System
-function lockSystem(message) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.getSheets().forEach(sh => {
-    if (sh.getName() === 'Sign-in') return;
-    sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
-    const prot = sh.protect();
-    prot.setWarningOnly(false);
-    prot.setDescription('Locked by license validation.');
-    prot.removeEditors(prot.getEditors());
-  });
-  SpreadsheetApp.getUi().alert(message);
-}
-
-function unlockSystem(message) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.getSheets().forEach(sh => {
-    sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => p.remove());
-  });
-  SpreadsheetApp.getUi().alert(message);
-}
-
-// Trigger helpers
-function createOnOpenTrigger() {
-  const triggers = ScriptApp.getProjectTriggers();
-  if (!triggers.some(t => t.getHandlerFunction() === 'onOpenHandler')) {
-    ScriptApp.newTrigger('onOpenHandler')
-      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
-      .onOpen()
-      .create();
-  }
-}
-
-function onOpenHandler() {
-  validateLicense();
-}
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
