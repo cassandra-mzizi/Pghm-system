@@ -5,16 +5,11 @@ var ssdata = SpreadsheetApp.getActiveSpreadsheet();
 var ss = SpreadsheetApp.getActiveSpreadsheet();
 //let isActive = false;
 
-
 //----------------------------LITTER------------------------------------
 
 // Search Litter
 function searchLitter() {
-    enforceLicenseBeforeScript(); 
- if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
+  assertSystemAccess();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var litterFormSheet = ss.getSheetByName('Litter Management Form');
   var litterDatabaseSheet = ss.getSheetByName('Litter Management Database');
@@ -60,6 +55,9 @@ function searchLitter() {
     litterFormSheet.getRange('G21').setValue(rowData[16]); // Assuming the data in column R
     litterFormSheet.getRange('G23').setValue(rowData[17]); // Assuming the data in column S
 
+    // For the third row
+    litterFormSheet.getRange('G23').setValue(rowData[18]); // Assuming the data in column T
+
     // Show UI alert for match found
     ui.alert('Match Found', 'Matching data has been populated in the Results panel.', ui.ButtonSet.OK);
   } else {
@@ -70,11 +68,7 @@ function searchLitter() {
 
 // Save Litter
 function saveLitterData() {
-  enforceLicenseBeforeScript(); 
-   if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
+ assertSystemAccess(); 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sourceSheet = ss.getSheetByName('Litter management Form');
   var targetSheet = ss.getSheetByName('Litter management database');
@@ -97,7 +91,8 @@ function saveLitterData() {
     sourceSheet.getRange('G17').getValues()[0][0],
     sourceSheet.getRange('G19').getValues()[0][0],
     sourceSheet.getRange('G21').getValues()[0][0],
-    sourceSheet.getRange('G23').getValues()[0][0]
+    sourceSheet.getRange('G23').getValues()[0][0],
+    sourceSheet.getRange('J7').getValues()[0][0]
   ];
   var identifier = sourceSheet.getRange('D13').getValues()[0][0]; // Check the value in cell "D11"
 
@@ -110,7 +105,7 @@ function saveLitterData() {
   } else {
     // Get the next available row in the target sheet
     var lastRow = targetSheet.getLastRow();
-    var targetRange = targetSheet.getRange('B' + (lastRow + 1) + ':S' + (lastRow + 1));
+    var targetRange = targetSheet.getRange('B' + (lastRow + 1) + ':T' + (lastRow + 1));
 
     // Set the values in the target range
     targetRange.setValues([dataToTransfer]);
@@ -122,112 +117,119 @@ function saveLitterData() {
 
 // Modify Litter
 function modifyLitter() {
-  enforceLicenseBeforeScript(); 
-  if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
+  assertSystemAccess();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const form = ss.getSheetByName('Litter Management Form');
+  const db = ss.getSheetByName('Litter Management Database');
+  const ui = SpreadsheetApp.getUi();
+
+  if (!form || !db) {
+    ui.alert('Error', 'Required sheet not found.', ui.ButtonSet.OK);
     return;
   }
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var litterFormSheet = ss.getSheetByName('Litter Management Form');
-  var litterDatabaseSheet = ss.getSheetByName('Litter Management Database');
-  var ui = SpreadsheetApp.getUi(); // Get the UI instance
 
-  // Values to search for
-  var valueD4 = litterFormSheet.getRange('D4').getValue();
-  var valueD11 = litterFormSheet.getRange('D13').getValue();
-
-  var lastRow = litterDatabaseSheet.getLastRow();
-  var columnDData = litterDatabaseSheet.getRange('E1:E' + lastRow).getValues();
-
-  var foundRowIndex = -1;
-  var duplicateD11RowIndex = -1;
-
-  // Check for matching ID in the database (D4)
-  for (var i = 0; i < columnDData.length; i++) {
-    if (columnDData[i][0] === valueD4) {
-      foundRowIndex = i + 1; // Adding 1 to convert from 0-based index to 1-based row number
-    }
-    if (columnDData[i][0] === valueD11 && i + 1 !== foundRowIndex) {
-      duplicateD11RowIndex = i + 1;
-    }
+  // 🔑 Litter ID to match on (FORM D13)
+  const litterId = String(form.getRange('D13').getValue()).trim();
+  if (!litterId) {
+    ui.alert('Error', 'Litter ID (D13) is empty.', ui.ButtonSet.OK);
+    return;
   }
 
-  // Ask for confirmation if there is a duplicate in D11
-  if (duplicateD11RowIndex !== -1) {
-    var response = ui.alert('Duplicate ID Found', 'Another entry with the same ID as D11 exists. Do you want to overwrite it?', ui.ButtonSet.YES_NO);
-    if (response === ui.Button.NO) {
-      ui.alert('Modification Cancelled', 'No changes were made.', ui.ButtonSet.OK);
+  const lastRow = db.getLastRow();
+  if (lastRow < 2) {
+    ui.alert('Error', 'Database is empty.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Column E = Litter ID → index 4
+  const litterIds = db.getRange(2, 5, lastRow - 1, 1).getValues().flat();
+
+  // Find all matching rows
+  const matches = [];
+  litterIds.forEach((id, i) => {
+    if (String(id).trim() === litterId) {
+      matches.push(i + 2); // real row number
+    }
+  });
+
+  if (matches.length === 0) {
+    ui.alert(
+      'Not Found',
+      `No record found for Litter ID (${litterId}).`,
+      ui.ButtonSet.OK
+    );
+    return;
+  }
+
+  // If duplicates exist, confirm overwrite
+  let targetRow = matches[0];
+  if (matches.length > 1) {
+    const resp = ui.alert(
+      'Duplicate Litter IDs Found',
+      `There are ${matches.length} entries with Litter ID (${litterId}).\n\nOverwrite the FIRST one (row ${targetRow})?`,
+      ui.ButtonSet.YES_NO
+    );
+    if (resp !== ui.Button.YES) {
+      ui.alert('Cancelled', 'No changes were made.', ui.ButtonSet.OK);
       return;
     }
   }
 
-  if (foundRowIndex !== -1) {
-    // Get the values from the form
-    var valuesFromForm = [
-      litterFormSheet.getRange('D7').getValue(),
-      litterFormSheet.getRange('D9').getValue(),
-      //valueD4,
-      litterFormSheet.getRange('D11').getValue(),
-      litterFormSheet.getRange('D13').getValue(),
-      litterFormSheet.getRange('D15').getValue(),
-      litterFormSheet.getRange('D17').getValue(),
-      litterFormSheet.getRange('D19').getValue(),
-      litterFormSheet.getRange('D21').getValue(),
-      litterFormSheet.getRange('D23').getValue(),
-      litterFormSheet.getRange('G7').getValue(),
-      litterFormSheet.getRange('G9').getValue(),
-      litterFormSheet.getRange('G11').getValue(),
-      litterFormSheet.getRange('G13').getValue(),
-      litterFormSheet.getRange('G15').getValue(),
-      litterFormSheet.getRange('G17').getValue(),
-      litterFormSheet.getRange('G19').getValue(),
-      litterFormSheet.getRange('G21').getValue(),
-      litterFormSheet.getRange('G23').getValue()
-    ];
+  // Pull values from the form (B–S mapping)
+  const valuesFromForm = [
+    form.getRange('D7').getValue(),   // Sow Number
+    form.getRange('D9').getValue(),   // Parity
+    form.getRange('D11').getValue(),  // Boar Number
+    form.getRange('D13').getValue(),  // Litter ID
+    form.getRange('D15').getValue(),  // DOB
+    form.getRange('D17').getValue(),  // Total Born
+    form.getRange('D19').getValue(),  // Born Dead
+    form.getRange('D21').getValue(),  // Mummified
+    form.getRange('D23').getValue(),  // Other Causes
+    form.getRange('G7').getValue(),   // Born Alive
+    form.getRange('G9').getValue(),   // Total Birth Weight
+    form.getRange('G11').getValue(),  // Date Weaned
+    form.getRange('G13').getValue(),  // Number Weaned
+    form.getRange('G15').getValue(),  // Date Killed
+    form.getRange('G17').getValue(),  // Number Sent to Abattoir
+    form.getRange('G19').getValue(),  // Age at Slaughter
+    form.getRange('G21').getValue(),  // Age at Slaughter
+    form.getRange('G23').getValue(),  // Number Sold Breeding
+    form.getRange('J7').getValue()    // Total Weight Sold Live
+  ];
 
-    // Get the old values from the database
-    var oldValues = litterDatabaseSheet.getRange(foundRowIndex, 2, 1, valuesFromForm.length).getValues()[0];
-
-    // Track changes
-    var changes = [];
-
-    // Overwrite matching row with values from the form
-    for (var j = 0; j < valuesFromForm.length; j++) {
-      if (valuesFromForm[j] !== oldValues[j]) {
-        changes.push(litterDatabaseSheet.getRange(1, j + 2).getA1Notation());
-      }
-    }
-
-    // Ask for confirmation before making changes
-    var confirmation = ui.alert('Confirm Changes', 'Are you sure you want to make these changes?', ui.ButtonSet.YES_NO);
-    if (confirmation === ui.Button.NO) {
-      ui.alert('Modification Cancelled', 'No changes were made.', ui.ButtonSet.OK);
-      return;
-    }
-
-    litterDatabaseSheet.getRange(foundRowIndex, 2, 1, valuesFromForm.length).setValues([valuesFromForm]);
-
-    // Show UI alert for successful modification with concise changes
-    ui.alert('Success', 'LitterID (' + valueD4 + ') modified successfully.', ui.ButtonSet.OK);
-  } else {
-    // If no match found, display an error alert
-    ui.alert('Error', 'No matching data found in the database. Modification Failed', ui.ButtonSet.OK);
+  // Confirm update
+  const confirm = ui.alert(
+    'Confirm Modification',
+    `Overwrite existing record for Litter ID (${litterId})?`,
+    ui.ButtonSet.YES_NO
+  );
+  if (confirm !== ui.Button.YES) {
+    ui.alert('Cancelled', 'No changes were made.', ui.ButtonSet.OK);
+    return;
   }
+
+  // ✅ OVERWRITE EXISTING ROW (B → S)
+  db.getRange(targetRow, 2, 1, valuesFromForm.length)
+    .setValues([valuesFromForm]);
+
+  ui.alert(
+    'Success',
+    `Litter ID (${litterId}) updated successfully.`,
+    ui.ButtonSet.OK
+  );
 }
 
 // Clear Litter
 function clearLitterManagementForm() {
-   enforceLicenseBeforeScript(); 
-    if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
+   assertSystemAccess();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var litterFormSheet = ss.getSheetByName("Litter Management Form");
 
   var cellsToClear = [
     "D7", "D9", "D11", "D13", "D15", "D17", "D19", "D21", "D23",
-    "G7", "G9", "G11", "G13", "G15", "G17", "G19", "G21", "G23"
+    "G7", "G9", "G11", "G13", "G15", "G17", "G19", "G21", "G23",
+    "J7"
   ];
 
   cellsToClear.forEach(function (cellRange) {
@@ -240,11 +242,7 @@ function clearLitterManagementForm() {
 
 // Delete Litter
 function deleteLitterBasedOnID() {
- // enforceLicenseBeforeScript(); 
-   if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
+  assertSystemAccess();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var litterFormSheet = ss.getSheetByName('Litter Management Form');
   var litterDatabaseSheet = ss.getSheetByName('Litter Management Database');
@@ -294,8 +292,9 @@ function deleteLitterBasedOnID() {
         litterFormSheet.getRange('G15').clearContent(),
         litterFormSheet.getRange('G17').clearContent(),
         litterFormSheet.getRange('G19').clearContent(),
-        litterFormSheet.getRange('G21').clearContent();
-        litterFormSheet.getRange('G23').clearContent();
+        litterFormSheet.getRange('G21').clearContent(),
+        litterFormSheet.getRange('G23').clearContent(),
+        litterFormSheet.getRange('J7').clearContent()
 
       ui.alert('Data has been deleted!', ui.ButtonSet.OK);
     } else {
@@ -310,13 +309,8 @@ function deleteLitterBasedOnID() {
 
 //----------------------------SOWS-----------------------------------
 
-
 function searchSows() {
-   enforceLicenseBeforeScript(); 
-   if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
+  assertSystemAccess();
   var ui = SpreadsheetApp.getUi();
 
   var sowSheet = ssdata.getSheetByName("Sow Management Database");
@@ -342,6 +336,7 @@ function searchSows() {
         formSheet.getRange("I17").setValue(data[i][5]); // Date Mated
         formSheet.getRange("F19").setValue(data[i][6]); // Actual Farrowing Date
         formSheet.getRange("I19").setValue(data[i][7]); // Date Weaned
+        formSheet.getRange("F21:I21").setValue(data[i][31] ?? "");// Comments & Notes
 
         value = data[i][17] || "is empty"; formSheet.getRange("F28").setValue(value);  // FarrowSure (Primary)
         value = data[i][18] || "is empty"; formSheet.getRange("F30").setValue(value); // FarrowSure (Booster)
@@ -368,6 +363,7 @@ function searchSows() {
         formSheet.getRange("I17").setValue(data[i][5]); // Date Mated
         formSheet.getRange("F19").setValue(data[i][6]); // Actual Farrowing Date
         formSheet.getRange("I19").setValue(data[i][7]); // Date Weaned
+        formSheet.getRange("F21:I21").setValue(data[i][31] ?? ""); // Comments & Notes
 
         // FarrowSure (Primary)
         value = data[i][19] || "is empty"; formSheet.getRange("I30").setValue(value); // FarrowSure (Booster)
@@ -395,12 +391,7 @@ function searchSows() {
 
 // Save Sows
 function saveSow() {
-  enforceLicenseBeforeScript();
-  if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
-
+  assertSystemAccess();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const source = ss.getSheetByName('Sow Management Form');
   const target = ss.getSheetByName('Sow Management Database');
@@ -422,6 +413,7 @@ function saveSow() {
   const dateMatedVal = source.getRange('I17').getValue();     // -> column F
   const actualFarrowVal = source.getRange('F19').getValue();  // -> column G
   const dateWeanedVal = source.getRange('I19').getValue();    // -> column H
+  const commentsNotesVal = source.getRange('F21').getValue(); // -> column AF
 
   // --- Required validation
   if (!sowId || sowId === "" || parity === "" || parity === null || parity === undefined) {
@@ -489,17 +481,17 @@ function saveSow() {
     target.getRange(nextRow, 8).setValue(dateWeanedVal);
   }
 
+ // AF = Comments and Notes <- write only if I19 not blank
+  if (commentsNotesVal !== "" && commentsNotesVal !== null && commentsNotesVal !== undefined) {
+    target.getRange(nextRow, 32).setValue(commentsNotesVal);
+  }
+
   ui.alert("Success", "Data saved successfully. For results to show, SEARCH AGAIN.", ui.ButtonSet.OK);
 }
 
 ///Modify Sows
 function modifySow() {
-  enforceLicenseBeforeScript();
-  if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
-
+  assertSystemAccess();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sowFormSheet = ss.getSheetByName('Sow Management Form');
   const sowDB = ss.getSheetByName('Sow Management Database');
@@ -520,6 +512,7 @@ function modifySow() {
   const dateMatedVal = sowFormSheet.getRange('I17').getValue();
   const actualFarrowVal = sowFormSheet.getRange('F19').getValue();
   const dateWeanedVal = sowFormSheet.getRange('I19').getValue();
+  const commentsNotesVal = sowFormSheet.getRange('F21').getValue();
 
   if (!sowId || sowId === "" || parity === "" || parity === null || parity === undefined) {
     ui.alert("Error", "SOW ID and PARITY fields must be filled before modifying.", ui.ButtonSet.OK);
@@ -569,6 +562,9 @@ function modifySow() {
   if (dateWeanedVal !== "" && dateWeanedVal !== null && dateWeanedVal !== undefined) {
     sowDB.getRange(rowNum, 8).setValue(dateWeanedVal);   // H: Date Weaned
   }
+  if (commentsNotesVal !== "" && commentsNotesVal !== null && commentsNotesVal !== undefined) {
+    sowDB.getRange(rowNum, 32).setValue(commentsNotesVal);   // H: Date Weaned
+  }
 
   // --- Success message ---
   ui.alert(
@@ -578,14 +574,9 @@ function modifySow() {
   );
 }
 
-
 // Clear Sow Form
 function clearSowManagementForm() {
- enforceLicenseBeforeScript(); 
- if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
+  assertSystemAccess();
   var sowFormSheet = ss.getSheetByName('Sow Management Form');
 
   if (!sowFormSheet) {
@@ -593,7 +584,7 @@ function clearSowManagementForm() {
   }
 
   var cellsToClear = [
-    "F13", "I13", "F15", "I15", "F17", "I17", "F19", "I19", // Inpute Cells 
+    "F13", "I13", "F15", "I15", "F17", "I17", "F19", "I19", "F21", // Inpute Cells 
     "F28", "F30", "F32", "F34", "F36", "F38", "F40", "F42",
     "F44", "F46", "F48", "F50", "F52", "I30", "I32", "I34",
     "I38", "I40", "I42", "I44", "I46", "I48", "I50", "I52"
@@ -608,11 +599,7 @@ function clearSowManagementForm() {
 
 // Delete Sow Management
 function deleteSowManagement() {
-  enforceLicenseBeforeScript(); 
-   if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
+  assertSystemAccess();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var formSheet = ss.getSheetByName('Sow Management Form');
   var sowDatabaseSheet = ss.getSheetByName('Sow Management Database');
@@ -662,6 +649,7 @@ function deleteSowManagement() {
       formSheet.getRange("I17").clearContent(); // Date Mated
       formSheet.getRange("F19").clearContent(); // Actual Farrowing Date
       formSheet.getRange("I19").clearContent(); // Date Weaned
+      formSheet.getRange("F21").clearContent(); // Comments & Notes
       formSheet.getRange("F28").clearContent(); // FarrowSure (Primary)
       formSheet.getRange("F30").clearContent(); // FarrowSure (Booster)
       formSheet.getRange("F32").clearContent(); // 21-day Check OR Scan
@@ -685,6 +673,7 @@ function deleteSowManagement() {
       formSheet.getRange("I17").clearContent(); // Date Mated
       formSheet.getRange("F19").clearContent(); // Actual Farrowing Date
       formSheet.getRange("I19").clearContent(); // Date Weaned
+      formSheet.getRange("F21").clearContent(); // Comments & Notes
       formSheet.getRange("I30").clearContent(); // FarrowSure (Booster)
       formSheet.getRange("I32").clearContent(); // 21-day Check OR Scan
       formSheet.getRange("I34").clearContent(); // 42-day Check
@@ -710,16 +699,10 @@ function deleteSowManagement() {
 
 //----------------------------------Transfer---------------------------------- 
 
-
 //Tranfer Sow Information
 
 function transferDataUpdate() {
-  enforceLicenseBeforeScript(); 
-  if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
-
+  assertSystemAccess();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sourceSheet = ss.getSheetByName("Sow Management Form");
   const targetSheet = ss.getSheetByName("Litter Management Database");
@@ -781,7 +764,7 @@ function transferDataUpdate() {
       targetSheet.getRange(rowToOverwrite, 4).setValue(boarId);      // Column D
       targetSheet.getRange(rowToOverwrite, 5).setValue(litterId);    // Column E
       targetSheet.getRange(rowToOverwrite, 6).setValue(dob);         // Column F
-      targetSheet.getRange(rowToOverwrite, 12).setValue(dateWeaned); // Column L
+      targetSheet.getRange(rowToOverwrite, 14).setValue(dateWeaned); // Column M
 
       ui.alert(`The existing data for Litter ID: ${litterId} has been overwritten.`);
     } catch (e) {
@@ -799,16 +782,15 @@ function transferDataUpdate() {
   targetSheet.getRange(nextRow, 4).setValue(boarId);      // Column D
   targetSheet.getRange(nextRow, 5).setValue(litterId);    // Column E
   targetSheet.getRange(nextRow, 6).setValue(dob);         // Column F
-  targetSheet.getRange(nextRow, 12).setValue(dateWeaned); // Column l
+  targetSheet.getRange(nextRow, 14).setValue(dateWeaned); // Column M
 
   ui.alert(`${data} \nData has been transferred to "Litter Management Database".\nPlease use Litter ID to add missing information.`);
 }
 
-
 //------------------------------------ALERT------------------------------------ 
 
 function onOpen() {
-  enforceLicenseBeforeScript(); 
+  assertSystemAccess();; 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const dbSheet = ss.getSheetByName("Sow Management Database");
@@ -888,18 +870,156 @@ function isDateInRange(start, end, weekStart, weekEnd) {
   return (s <= weekEnd && e >= weekStart);
 }
 
-
 //----------------------------------SHCHEDULE---------------------------------- 
 
+// Single Sow
+function generateSingleSowReport() {
+  assertSystemAccess();
+  const ui = SpreadsheetApp.getUi();
 
-function generateReporting() {
-  enforceLicenseBeforeScript(); 
-// Check if license is active
-  if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
+  const response = ui.prompt(
+    'Generate Sow Report',
+    'Enter Sow ID:',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+
+  const sowId = response.getResponseText().trim();
+  if (!sowId) {
+    ui.alert('Invalid Sow ID.');
     return;
   }
 
+  const ss = SpreadsheetApp.getActive();
+  const sowSheet = ss.getSheetByName('Sow Management Database');
+  const litterSheet = ss.getSheetByName('Litter Management Database');
+
+  if (!sowSheet || !litterSheet) {
+    ui.alert('Required sheet not found.');
+    return;
+  }
+
+  const sowRows = sowSheet.getDataRange().getValues().slice(1)
+    .filter(r => String(r[0]).trim() === sowId);
+
+  if (!sowRows.length) {
+    ui.alert(`No records found for Sow ID ${sowId}`);
+    return;
+  }
+
+  const litterRows = litterSheet.getDataRange().getValues().slice(1);
+
+  const pdfUrl = generateSowPDF(sowId, sowRows, litterRows);
+
+  const html = HtmlService.createHtmlOutput(
+    `<p><b>Report Generated</b></p>
+     <p><a href="${pdfUrl}" target="_blank">Open Sow Report – ${sowId}</a></p>`
+  ).setWidth(320).setHeight(140);
+
+  ui.showModalDialog(html, 'Success');
+}
+
+// PDF CREATION 
+function generateSowPDF(sowId, sowRows, litterRows) {
+  const doc = DocumentApp.create(`Sow Report – ${sowId}`);
+  const body = doc.getBody();
+
+  body.appendParagraph('Sow Report')
+    .setHeading(DocumentApp.ParagraphHeading.TITLE);
+
+  body.appendParagraph(`Sow ID: ${sowId}`);
+  body.appendParagraph(`Total Parities: ${sowRows.length}`);
+  body.appendHorizontalRule();
+
+  sowRows.forEach((sowRow, i) => {
+    const litterId = sowRow[3];   // Litter ID
+    const comments = sowRow[31];  // AF
+
+    body.appendParagraph(`Parity ${i + 1}`)
+      .setHeading(DocumentApp.ParagraphHeading.HEADING1);
+
+    appendField(body, 'Sow Number', sowRow[0]);
+    appendField(body, 'Parity', sowRow[2]);
+    appendField(body, 'Boar Number', sowRow[1]);
+    appendField(body, 'Litter ID', litterId);
+
+    if (comments) {
+      body.appendParagraph('Comments')
+        .setHeading(DocumentApp.ParagraphHeading.HEADING3);
+      body.appendParagraph(String(comments));
+    }
+
+    // Litter ID is column E → index 4
+    const litter = litterRows.find(r =>
+      String(r[4]).trim() === String(litterId).trim()
+    );
+
+  if (litter) {
+    body.appendParagraph('Litter Information')
+      .setHeading(DocumentApp.ParagraphHeading.HEADING3);
+
+    appendField(body, 'Date of Birth', litter[5]);              // F
+    appendField(body, 'Total Born', litter[6]);                 // G
+    appendField(body, 'Born Dead', litter[7]);                  // H
+    appendField(body, 'Mummified', litter[8]);                  // I
+    appendField(body, 'Born Alive', litter[9]);                 // J
+    appendField(body, 'Total Birth Weight', litter[10]);        // K
+    appendField(body, 'Date Weaned', litter[11]);               // L
+    appendField(body, 'Number Weaned', litter[12]);             // M
+    appendField(body, 'Date Killed', litter[13]);               // N
+    appendField(body, 'Number Sent To Abattoir', litter[14]);   // O
+    appendField(body, 'Total Carcass Weight', litter[15]);      // P
+    appendField(body, 'Age at Slaughter', litter[16]);          // Q
+    appendField(body, 'Number Sold as Breeding Stock', litter[17]); // R
+    appendField(body, 'Total Weight Sold Live', litter[18]);    // S
+  }
+  else {
+      body.appendParagraph('No litter data found.')
+        .setItalic(true);
+    }
+
+    body.appendHorizontalRule();
+  });
+
+  doc.saveAndClose();
+
+  const pdfBlob = DriveApp.getFileById(doc.getId())
+    .getAs(MimeType.PDF)
+    .setName(`Sow Report – ${sowId}.pdf`);
+
+  const folder = DriveApp.getFoldersByName('Report').hasNext()
+    ? DriveApp.getFoldersByName('Report').next()
+    : DriveApp.createFolder('Report');
+
+  const file = folder.createFile(pdfBlob);
+  DriveApp.getFileById(doc.getId()).setTrashed(true);
+
+  return file.getUrl();
+}
+
+// HELPERS 
+function appendField(body, label, value) {
+  body.appendParagraph(`${label}: ${formatValue(value)}`);
+}
+
+function formatValue(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  if (v instanceof Date) {
+    return Utilities.formatDate(
+      v,
+      Session.getScriptTimeZone(),
+      'dd/MM/yyyy'
+    );
+  }
+  return String(v);
+}
+
+// Weekly
+
+function generateReporting() {
+// Check if license is active
+  assertSystemAccess();
   const sheetName = 'Sow Management Database'; // Replace with your actual sheet name
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
 
@@ -931,13 +1051,13 @@ function generateReporting() {
     { name: "RespiSure Booster",                  cols: [16, 22]   },
 
     { name: "Move Sow / Gilt into farrowing pen",   cols: [9, 9]     },
-    { name: "Check for Heat", cols: [30, 30] },
+    { name: "Check for Heat post weaning", cols: [30, 30] },
     { name: "Expected Farrowing Date",              cols: [8, 8]     },
     { name: "Teeth, Tail, Iron, Ear Notching, Castration", cols: [28, 28] },
     { name: "RespiSure-One (piglets)",              cols: [23, 23]   },
     { name: "RespiSure-2nd (piglets)",              cols: [24, 24]   },
 
-    { name: "Ivermectin Deworming Pre-Farrowing",                cols: [27, 25] },
+    //{ name: "Ivermectin Deworming Pre-Farrowing",                cols: [27, 25] },
     { name: "Ivermectin Deworming Pre-Mating",                  cols: [26, null]   },
 
     { name: "Expected Weaning Date",                cols: [10, 10]   },
@@ -1138,18 +1258,17 @@ function generateReporting() {
                .setBold(true);
   }
 }
-
 // === ADD KEY ===
 
-  //Multiply days
-  body.appendParagraph(`* Activities can be done on multiple days`)
-      .setHeading(DocumentApp.ParagraphHeading.HEADING3)
-      .setBold(false);
-
-  //Two days
-  body.appendParagraph(`^ Activities can be done over Two days.`)
-      .setHeading(DocumentApp.ParagraphHeading.HEADING3)
-      .setBold(false);
+    body.appendParagraph(`* Activities can be done any time this week`)
+        .setHeading(DocumentApp.ParagraphHeading.HEADING3)
+        .setBold(false);
+    body.appendParagraph(`^Activities can happen a day earlier or later than predicted. .`)
+        .setHeading(DocumentApp.ParagraphHeading.HEADING3)
+        .setBold(false);
+    body.appendParagraph(`☐ To be ticked off as tasks are done.`)
+        .setHeading(DocumentApp.ParagraphHeading.HEADING3)
+        .setBold(false);
 
 
 // === SAVE & CONVERT TO PDF ===
@@ -1173,7 +1292,6 @@ function generateReporting() {
 }
 }
 
-
 // === DATE FORMATTER ===
 function formatDate(date) {
   return new Intl.DateTimeFormat('en-GB', {
@@ -1193,21 +1311,12 @@ function getOrdinal(day) {
   }
 }
 
-
-
-
 // Print Monthly
 
-
 function generateMonthlyReporting() {
- // enforceLicenseBeforeScript(); 
-/* LICENSE CHECK */
-  if (!getLicenseState()) {
-    SpreadsheetApp.getUi().alert("License is not active. Please validate your license.");
-    return;
-  }
-
-/* SHEET SETUP */
+// Check if license is active
+ assertSystemAccess();
+// SHEET SETUP
   const SHEET_NAME = 'Sow Management Database';
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
   if (!sheet) {
@@ -1215,17 +1324,17 @@ function generateMonthlyReporting() {
     return;
   }
 
-/* UI SETUP */
+// UI SETUP
   const ui = SpreadsheetApp.getUi();
   ui.alert('Checking your monthly report…');
 
-/* DATE HELPERS */
+// DATE HELPERS 
   const today       = new Date();
   const monthStart  = getStartOfMonth(today);
   const monthEnd    = getEndOfMonth(today);
   const headingDate = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric' }).format(today);
 
-/* ACTIVITY COLUMNS */
+// ACTIVITY COLUMNS 
   const activityColumns = [
     { name: "FarrowSure (Primary)", cols: [17, null] },
     { name: "FarrowSure (Booster)", cols: [18, 19] },
@@ -1236,18 +1345,18 @@ function generateMonthlyReporting() {
     { name: "RespiSure (Primary)", cols: [15, 21] },
     { name: "RespiSure Booster", cols: [16, 22] },
     { name: "Move Sow / Gilt into farrowing pen", cols: [9, 9] },
-    { name: "Check for Heat", cols: [30, 30] },
+    { name: "Check for Heat post weaning", cols: [30, 30] },
     { name: "Expected Farrowing Date", cols: [8, 8] },
     { name: "Teeth, Tail, Iron, Ear Notching, Castration", cols: [28, 28] },
     { name: "RespiSure-One (piglets)", cols: [23, 23] },
     { name: "RespiSure-2nd (piglets)", cols: [24, 24] },
-    { name: "Ivermectin Deworming Pre-Farrowing", cols: [27, 25] },
+    //{ name: "Ivermectin Deworming Pre-Farrowing", cols: [27, 25] },
     { name: "Ivermectin Deworming Pre-Mating", cols: [26, null] },
     { name: "Expected Weaning Date", cols: [10, 10] },
     { name: "Flush feeding sow pre-mating", cols: [29, 29] }
   ];
 
-/* DATA EXTRACTION */
+// DATA EXTRACTION 
   const data       = sheet.getDataRange().getValues();
   const activities = [];
 
@@ -1269,7 +1378,7 @@ function generateMonthlyReporting() {
     });
   }
 
-/* PROMPT */
+// PROMPT 
   if (activities.length > 0) {
     const resp = ui.alert(`There are activities for ${headingDate}.\nWould you like me to print the report?`, ui.ButtonSet.YES_NO);
     if (resp === ui.Button.YES) {
@@ -1281,7 +1390,7 @@ function generateMonthlyReporting() {
     ui.alert('Nothing to do this month.');
   }
 
-/* HELPERS */
+// HELPERS 
   function parseDateRange(value) {
     if (value instanceof Date) return [value, value];
     const str = value.toString();
@@ -1323,7 +1432,7 @@ function generateMonthlyReporting() {
     return start <= rangeEnd && end >= rangeStart;
   }
 
-/* MATCHES WEEKLY PDF STYLE */
+// MATCHES WEEKLY PDF STYLE 
   function generatePDF(acts, startDate, endDate, heading) {
     const doc = DocumentApp.create(`Monthly Report: ${heading}`);
     const body = doc.getBody();
@@ -1387,13 +1496,17 @@ function generateMonthlyReporting() {
       }
     }
 
-    // Legend
-    body.appendParagraph(`* Activities can be done on multiple days`)
+// ADD KEY 
+    body.appendParagraph(`* Activities can be done any time this week`)
         .setHeading(DocumentApp.ParagraphHeading.HEADING3)
         .setBold(false);
-    body.appendParagraph(`^ Activities can be done over Two days.`)
+    body.appendParagraph(`^Activities can happen a day earlier or later than predicted. .`)
         .setHeading(DocumentApp.ParagraphHeading.HEADING3)
         .setBold(false);
+    body.appendParagraph(`☐ To be ticked off as tasks are done.`)
+        .setHeading(DocumentApp.ParagraphHeading.HEADING3)
+        .setBold(false);
+
 
     // Save & convert
     doc.saveAndClose();
@@ -1426,9 +1539,9 @@ function getOrdinal(day) {
   }
 }
 
-
 /* ----------------------------------------------------------------------- */
 
+// End
 
 
 // End
