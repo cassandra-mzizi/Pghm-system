@@ -13,19 +13,19 @@ function searchLitter() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var litterFormSheet = ss.getSheetByName('Litter Management Form');
   var litterDatabaseSheet = ss.getSheetByName('Litter Management Database');
-  var ui = SpreadsheetApp.getUi(); // Get the UI instance
+  var ui = SpreadsheetApp.getUi();
 
-  // Value to search for
+  // Value to search for (from D4)
   var nameToSearch = litterFormSheet.getRange('D4').getValue();
 
   var lastRow = litterDatabaseSheet.getLastRow();
   var namesColumn = litterDatabaseSheet.getRange('E1:E' + lastRow).getValues();
   var foundRowIndex = -1;
 
-  // Check for matching name in the database
+  // Check for matching Litter ID in column E
   for (var i = 0; i < namesColumn.length; i++) {
-    if (namesColumn[i][0] === nameToSearch) {
-      foundRowIndex = i + 1; // Adding 1 to convert from 0-based index to 1-based row number
+    if (String(namesColumn[i][0]).trim() === String(nameToSearch).trim()) {
+      foundRowIndex = i + 1;
       break;
     }
   }
@@ -33,35 +33,33 @@ function searchLitter() {
   if (foundRowIndex !== -1) {
     var rowData = litterDatabaseSheet.getRange(foundRowIndex, 2, 1, litterDatabaseSheet.getLastColumn() - 1).getValues()[0];
 
-    // Displaying information in respective cells in "Litter Form"
-    litterFormSheet.getRange('D7').setValue(rowData[0]); // Assuming the data starts from column B
-    litterFormSheet.getRange('D9').setValue(rowData[1]); // Assuming the data in column C
-    litterFormSheet.getRange('D11').setValue(rowData[2]); // Assuming the data in column D
-    litterFormSheet.getRange('D13').setValue(rowData[3]); // Assuming the data in column E
-    litterFormSheet.getRange('D15').setValue(rowData[4]); // Assuming the data in column F
-    litterFormSheet.getRange('D17').setValue(rowData[5]); // Assuming the data in column G
-    litterFormSheet.getRange('D19').setValue(rowData[6]); // Assuming the data in column H
-    litterFormSheet.getRange('D21').setValue(rowData[7]); // Assuming the data in column I
-    litterFormSheet.getRange('D23').setValue(rowData[8]); // Assuming the data in column J
+    // LEFT COLUMN (D column)
+    litterFormSheet.getRange('D7').setValue(rowData[0]);    // B → Sow Number
+    litterFormSheet.getRange('D9').setValue(rowData[1]);    // C → Parity
+    litterFormSheet.getRange('D11').setValue(rowData[2]);   // D → Boar Number
+    litterFormSheet.getRange('D13').setValue(rowData[3]);   // E → Litter ID
+    litterFormSheet.getRange('D15').setValue(rowData[4]);   // F → D.O.B
+    litterFormSheet.getRange('D17').setValue(rowData[5]);   // G → Total Born
+    litterFormSheet.getRange('D19').setValue(rowData[6]);   // H → Born Dead
+    litterFormSheet.getRange('D21').setValue(rowData[7]);   // I → Mummified
+    litterFormSheet.getRange('D23').setValue(rowData[8]);   // J → Overlays & Other causes
 
-    // For the second row
-    litterFormSheet.getRange('G7').setValue(rowData[9]); // Assuming the data in column K
-    litterFormSheet.getRange('G9').setValue(rowData[10]); // Assuming the data in column L
-    litterFormSheet.getRange('G11').setValue(rowData[11]); // Assuming the data in column M
-    litterFormSheet.getRange('G13').setValue(rowData[12]); // Assuming the data in column M
-    litterFormSheet.getRange('G15').setValue(rowData[13]); // Assuming the data in column O
-    litterFormSheet.getRange('G17').setValue(rowData[14]); // Assuming the data in column P
-    litterFormSheet.getRange('G19').setValue(rowData[15]); // Assuming the data in column Q
-    litterFormSheet.getRange('G21').setValue(rowData[16]); // Assuming the data in column R
-    litterFormSheet.getRange('G23').setValue(rowData[17]); // Assuming the data in column S
+    // RIGHT COLUMN (G column)
+    litterFormSheet.getRange('G7').setValue(rowData[9]);    // K → Born Alive
+    litterFormSheet.getRange('G9').setValue(rowData[10]);   // L → Total Birth Weight
+    litterFormSheet.getRange('G11').setValue(rowData[11]);  // M → Date Weaned
+    litterFormSheet.getRange('G13').setValue(rowData[12]);  // N → Number Weaned
+    litterFormSheet.getRange('G15').setValue(rowData[13]);  // O → Date Killed
+    litterFormSheet.getRange('G17').setValue(rowData[14]);  // P → Number Sent To Abattoir
+    litterFormSheet.getRange('G19').setValue(rowData[15]);  // Q → Total Carcass Weight
+    litterFormSheet.getRange('G21').setValue(rowData[16]);  // R → Age at Slaughter
+    litterFormSheet.getRange('G23').setValue(rowData[17]);  // S → Number Sold Live
+    
+    // Far right
+    litterFormSheet.getRange('J7').setValue(rowData[18]);   // T → Total Weight of Stock Sold Live
 
-    // For the third row
-    litterFormSheet.getRange('G23').setValue(rowData[18]); // Assuming the data in column T
-
-    // Show UI alert for match found
     ui.alert('Match Found', 'Matching data has been populated in the Results panel.', ui.ButtonSet.OK);
   } else {
-    // If no match found, display an error alert
     ui.alert('No matching data found', 'No matching data found in the database.', ui.ButtonSet.OK);
   }
 }
@@ -185,14 +183,14 @@ function modifyLitter() {
     form.getRange('D17').getValue(),  // Total Born
     form.getRange('D19').getValue(),  // Born Dead
     form.getRange('D21').getValue(),  // Mummified
-    form.getRange('D23').getValue(),  // Other Causes
+    form.getRange('D23').getValue(),  // Overlay & Other Causes
     form.getRange('G7').getValue(),   // Born Alive
     form.getRange('G9').getValue(),   // Total Birth Weight
     form.getRange('G11').getValue(),  // Date Weaned
     form.getRange('G13').getValue(),  // Number Weaned
     form.getRange('G15').getValue(),  // Date Killed
     form.getRange('G17').getValue(),  // Number Sent to Abattoir
-    form.getRange('G19').getValue(),  // Age at Slaughter
+    form.getRange('G19').getValue(),  // Total Carcass Weight 
     form.getRange('G21').getValue(),  // Age at Slaughter
     form.getRange('G23').getValue(),  // Number Sold Breeding
     form.getRange('J7').getValue()    // Total Weight Sold Live
@@ -741,7 +739,8 @@ function transferDataUpdate() {
   let duplicateRowIndex = -1;
 
   if (lastRow > 1) {
-    const litterIds = targetSheet.getRange(2, 4, lastRow - 1, 1).getDisplayValues().flat();
+    // FIX: Read from correct column E (column position 5)
+    const litterIds = targetSheet.getRange(2, 5, lastRow - 1, 1).getDisplayValues().flat();
     normalizedLitterIds = litterIds.map(String);
     duplicateRowIndex = normalizedLitterIds.indexOf(String(litterId));
   }
@@ -764,7 +763,7 @@ function transferDataUpdate() {
       targetSheet.getRange(rowToOverwrite, 4).setValue(boarId);      // Column D
       targetSheet.getRange(rowToOverwrite, 5).setValue(litterId);    // Column E
       targetSheet.getRange(rowToOverwrite, 6).setValue(dob);         // Column F
-      targetSheet.getRange(rowToOverwrite, 14).setValue(dateWeaned); // Column M
+      targetSheet.getRange(rowToOverwrite, 13).setValue(dateWeaned); // Column M 
 
       ui.alert(`The existing data for Litter ID: ${litterId} has been overwritten.`);
     } catch (e) {
@@ -775,14 +774,25 @@ function transferDataUpdate() {
     return;
   }
 
-  // No duplicate found
-  const nextRow = lastRow + 1;
-  targetSheet.getRange(nextRow, 2).setValue(sowId);       // Column B
-  targetSheet.getRange(nextRow, 3).setValue(parity);      // Column C
-  targetSheet.getRange(nextRow, 4).setValue(boarId);      // Column D
-  targetSheet.getRange(nextRow, 5).setValue(litterId);    // Column E
-  targetSheet.getRange(nextRow, 6).setValue(dob);         // Column F
-  targetSheet.getRange(nextRow, 14).setValue(dateWeaned); // Column M
+  // FIX: Find first empty row by checking if Column E (Litter ID) is empty
+  let nextRow = lastRow + 1;
+  if (lastRow > 1) {
+    const allLitterIds = targetSheet.getRange(2, 5, lastRow - 1, 1).getValues().flat();
+    for (let i = 0; i < allLitterIds.length; i++) {
+      if (String(allLitterIds[i]).trim() === "") {
+        nextRow = i + 2; // Convert 0-based array index to 1-based row number (accounting for header)
+        break;
+      }
+    }
+  }
+
+  // No duplicate found, write to next available row
+  targetSheet.getRange(nextRow, 2).setValue(sowId);        // Column B
+  targetSheet.getRange(nextRow, 3).setValue(parity);       // Column C
+  targetSheet.getRange(nextRow, 4).setValue(boarId);       // Column D
+  targetSheet.getRange(nextRow, 5).setValue(litterId);     // Column E
+  targetSheet.getRange(nextRow, 6).setValue(dob);          // Column F
+  targetSheet.getRange(nextRow, 13).setValue(dateWeaned);  // Column M 
 
   ui.alert(`${data} \nData has been transferred to "Litter Management Database".\nPlease use Litter ID to add missing information.`);
 }
@@ -1541,7 +1551,6 @@ function getOrdinal(day) {
 
 /* ----------------------------------------------------------------------- */
 
-// End
 
 
 // End
