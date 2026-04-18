@@ -39,13 +39,13 @@ function searchLitter() {
     litterFormSheet.getRange('D11').setValue(rowData[2]);   // D → Boar Number
     litterFormSheet.getRange('D13').setValue(rowData[3]);   // E → Litter ID
     litterFormSheet.getRange('D15').setValue(rowData[4]);   // F → D.O.B
-    litterFormSheet.getRange('D17').setValue(rowData[5]);   // G → Total Born
+    litterFormSheet.getRange('D17').setValue(rowData[5]);   // G → Born Alive
     litterFormSheet.getRange('D19').setValue(rowData[6]);   // H → Born Dead
     litterFormSheet.getRange('D21').setValue(rowData[7]);   // I → Mummified
     litterFormSheet.getRange('D23').setValue(rowData[8]);   // J → Overlays & Other causes
 
     // RIGHT COLUMN (G column)
-    litterFormSheet.getRange('G7').setValue(rowData[9]);    // K → Born Alive
+    litterFormSheet.getRange('G7').setValue(rowData[9]);    // K → Total Born
     litterFormSheet.getRange('G9').setValue(rowData[10]);   // L → Total Birth Weight
     litterFormSheet.getRange('G11').setValue(rowData[11]);  // M → Date Weaned
     litterFormSheet.getRange('G13').setValue(rowData[12]);  // N → Number Weaned
@@ -66,51 +66,57 @@ function searchLitter() {
 
 // Save Litter
 function saveLitterData() {
- assertSystemAccess(); 
+  assertSystemAccess();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sourceSheet = ss.getSheetByName('Litter management Form');
-  var targetSheet = ss.getSheetByName('Litter management database');
+  var sourceSheet = ss.getSheetByName('Litter Management Form');
+  var targetSheet = ss.getSheetByName('Litter Management Database');
 
-  var dataToTransfer = [
-    sourceSheet.getRange('D7').getValues()[0][0],
-    sourceSheet.getRange('D9').getValues()[0][0],
-    sourceSheet.getRange('D11').getValues()[0][0],
-    sourceSheet.getRange('D13').getValues()[0][0],
-    sourceSheet.getRange('D15').getValues()[0][0],
-    sourceSheet.getRange('D17').getValues()[0][0],
-    sourceSheet.getRange('D19').getValues()[0][0],
-    sourceSheet.getRange('D21').getValues()[0][0],
-    sourceSheet.getRange('D23').getValues()[0][0],
-    sourceSheet.getRange('G7').getValues()[0][0],
-    sourceSheet.getRange('G9').getValues()[0][0],
-    sourceSheet.getRange('G11').getValues()[0][0],
-    sourceSheet.getRange('G13').getValues()[0][0],
-    sourceSheet.getRange('G15').getValues()[0][0],
-    sourceSheet.getRange('G17').getValues()[0][0],
-    sourceSheet.getRange('G19').getValues()[0][0],
-    sourceSheet.getRange('G21').getValues()[0][0],
-    sourceSheet.getRange('G23').getValues()[0][0],
-    sourceSheet.getRange('J7').getValues()[0][0]
+  // ── Collect form values ──────────────────────────────────────
+  // Col K (Total Born) and Col N (Number Weaned) are FORMULA columns
+  // in the database — we never write to them; the sheet computes them.
+  var group1 = [                                          // → DB cols B–J (sheet cols 2–10)
+    sourceSheet.getRange('D7').getValue(),   // B → Sow Number
+    sourceSheet.getRange('D9').getValue(),   // C → Parity
+    sourceSheet.getRange('D11').getValue(),  // D → Boar Number
+    sourceSheet.getRange('D13').getValue(),  // E → Litter ID
+    sourceSheet.getRange('D15').getValue(),  // F → D.O.B
+    sourceSheet.getRange('D17').getValue(),  // G → Born Alive
+    sourceSheet.getRange('D19').getValue(),  // H → Born Dead
+    sourceSheet.getRange('D21').getValue(),  // I → Mummified
+    sourceSheet.getRange('D23').getValue()   // J → Overlays & Other causes
+    // ── Col K (Total Born) is a formula — SKIPPED ──
   ];
-  var identifier = sourceSheet.getRange('D13').getValues()[0][0]; // Check the value in cell "D11"
+  var group2 = [                                          // → DB cols L–M (sheet cols 12–13)
+    sourceSheet.getRange('G9').getValue(),   // L → Total Birth Weight
+    sourceSheet.getRange('G11').getValue()   // M → Date Weaned
+    // ── Col N (Number Weaned) is a formula — SKIPPED ──
+  ];
+  var group3 = [                                          // → DB cols O–T (sheet cols 15–20)
+    sourceSheet.getRange('G15').getValue(),  // O → Date Killed
+    sourceSheet.getRange('G17').getValue(),  // P → Number Sent To Abattoir
+    sourceSheet.getRange('G19').getValue(),  // Q → Total Carcass Weight
+    sourceSheet.getRange('G21').getValue(),  // R → Age at Slaughter
+    sourceSheet.getRange('G23').getValue(),  // S → Number Sold Live
+    sourceSheet.getRange('J7').getValue()    // T → Total Weight of Stock Sold Live
+  ];
 
-  // Check for duplicates in column D of the target sheet
-  var columnDValues = targetSheet.getRange('E1:E' + targetSheet.getLastRow()).getValues().flat(); // Get all values in column D
-  if (columnDValues.includes(identifier)) {
+  var identifier = sourceSheet.getRange('D13').getValue(); // Litter ID
+
+  // ── Duplicate check (col E = Litter ID) ─────────────────────
+  var columnEValues = targetSheet.getRange('E1:E' + targetSheet.getLastRow()).getValues().flat();
+  if (columnEValues.includes(identifier)) {
     var ui = SpreadsheetApp.getUi();
-    ui.alert('Error', 'Duplicate of found. Data not transferred.', ui.ButtonSet.OK);
-    return; // Exit the function if a duplicate is found
-  } else {
-    // Get the next available row in the target sheet
-    var lastRow = targetSheet.getLastRow();
-    var targetRange = targetSheet.getRange('B' + (lastRow + 1) + ':T' + (lastRow + 1));
-
-    // Set the values in the target range
-    targetRange.setValues([dataToTransfer]);
-
-    var ui = SpreadsheetApp.getUi();
-    ui.alert('Success', 'Data saved successfully.', ui.ButtonSet.OK);
+    ui.alert('Error', 'Duplicate Litter ID found. Data not transferred.', ui.ButtonSet.OK);
+    return;
   }
+
+  // ── Write to next available row, skipping formula columns ───
+  var nextRow = targetSheet.getLastRow() + 1;
+  targetSheet.getRange(nextRow, 2,  1, group1.length).setValues([group1]); // B–J
+  targetSheet.getRange(nextRow, 12, 1, group2.length).setValues([group2]); // L–M
+  targetSheet.getRange(nextRow, 15, 1, group3.length).setValues([group3]); // O–T
+
+  SpreadsheetApp.getUi().alert('Success', 'Data saved successfully.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
 // Modify Litter
@@ -139,27 +145,19 @@ function modifyLitter() {
     return;
   }
 
-  // Column E = Litter ID → index 4
+  // Column E = Litter ID
   const litterIds = db.getRange(2, 5, lastRow - 1, 1).getValues().flat();
 
-  // Find all matching rows
   const matches = [];
   litterIds.forEach((id, i) => {
-    if (String(id).trim() === litterId) {
-      matches.push(i + 2); // real row number
-    }
+    if (String(id).trim() === litterId) matches.push(i + 2);
   });
 
   if (matches.length === 0) {
-    ui.alert(
-      'Not Found',
-      `No record found for Litter ID (${litterId}).`,
-      ui.ButtonSet.OK
-    );
+    ui.alert('Not Found', `No record found for Litter ID (${litterId}).`, ui.ButtonSet.OK);
     return;
   }
 
-  // If duplicates exist, confirm overwrite
   let targetRow = matches[0];
   if (matches.length > 1) {
     const resp = ui.alert(
@@ -173,29 +171,6 @@ function modifyLitter() {
     }
   }
 
-  // Pull values from the form (B–S mapping)
-  const valuesFromForm = [
-    form.getRange('D7').getValue(),   // Sow Number
-    form.getRange('D9').getValue(),   // Parity
-    form.getRange('D11').getValue(),  // Boar Number
-    form.getRange('D13').getValue(),  // Litter ID
-    form.getRange('D15').getValue(),  // DOB
-    form.getRange('D17').getValue(),  // Total Born
-    form.getRange('D19').getValue(),  // Born Dead
-    form.getRange('D21').getValue(),  // Mummified
-    form.getRange('D23').getValue(),  // Overlay & Other Causes
-    form.getRange('G7').getValue(),   // Born Alive
-    form.getRange('G9').getValue(),   // Total Birth Weight
-    form.getRange('G11').getValue(),  // Date Weaned
-    form.getRange('G13').getValue(),  // Number Weaned
-    form.getRange('G15').getValue(),  // Date Killed
-    form.getRange('G17').getValue(),  // Number Sent to Abattoir
-    form.getRange('G19').getValue(),  // Total Carcass Weight 
-    form.getRange('G21').getValue(),  // Age at Slaughter
-    form.getRange('G23').getValue(),  // Number Sold Breeding
-    form.getRange('J7').getValue()    // Total Weight Sold Live
-  ];
-
   // Confirm update
   const confirm = ui.alert(
     'Confirm Modification',
@@ -207,15 +182,41 @@ function modifyLitter() {
     return;
   }
 
-  // ✅ OVERWRITE EXISTING ROW (B → S)
-  db.getRange(targetRow, 2, 1, valuesFromForm.length)
-    .setValues([valuesFromForm]);
+  // ── Pull values from the form ────────────────────────────────
+  // Col K (Total Born) and Col N (Number Weaned) are FORMULA columns —
+  // we write around them in three separate groups to preserve the formulas.
+  const group1 = [                              // → DB cols B–J (sheet cols 2–10)
+    form.getRange('D7').getValue(),   // B → Sow Number
+    form.getRange('D9').getValue(),   // C → Parity
+    form.getRange('D11').getValue(),  // D → Boar Number
+    form.getRange('D13').getValue(),  // E → Litter ID
+    form.getRange('D15').getValue(),  // F → D.O.B
+    form.getRange('D17').getValue(),  // G → Born Alive
+    form.getRange('D19').getValue(),  // H → Born Dead
+    form.getRange('D21').getValue(),  // I → Mummified
+    form.getRange('D23').getValue()   // J → Overlays & Other Causes
+    // ── Col K (Total Born) is a formula — SKIPPED ──
+  ];
+  const group2 = [                              // → DB cols L–M (sheet cols 12–13)
+    form.getRange('G9').getValue(),   // L → Total Birth Weight
+    form.getRange('G11').getValue()   // M → Date Weaned
+    // ── Col N (Number Weaned) is a formula — SKIPPED ──
+  ];
+  const group3 = [                              // → DB cols O–T (sheet cols 15–20)
+    form.getRange('G15').getValue(),  // O → Date Killed
+    form.getRange('G17').getValue(),  // P → Number Sent to Abattoir
+    form.getRange('G19').getValue(),  // Q → Total Carcass Weight
+    form.getRange('G21').getValue(),  // R → Age at Slaughter
+    form.getRange('G23').getValue(),  // S → Number Sold Breeding
+    form.getRange('J7').getValue()    // T → Total Weight Sold Live
+  ];
 
-  ui.alert(
-    'Success',
-    `Litter ID (${litterId}) updated successfully.`,
-    ui.ButtonSet.OK
-  );
+  // ── Write, skipping formula columns K and N ─────────────────
+  db.getRange(targetRow, 2,  1, group1.length).setValues([group1]); // B–J
+  db.getRange(targetRow, 12, 1, group2.length).setValues([group2]); // L–M
+  db.getRange(targetRow, 15, 1, group3.length).setValues([group3]); // O–T
+
+  ui.alert('Success', `Litter ID (${litterId}) updated successfully.`, ui.ButtonSet.OK);
 }
 
 // Clear Litter
@@ -561,7 +562,7 @@ function modifySow() {
     sowDB.getRange(rowNum, 8).setValue(dateWeanedVal);   // H: Date Weaned
   }
   if (commentsNotesVal !== "" && commentsNotesVal !== null && commentsNotesVal !== undefined) {
-    sowDB.getRange(rowNum, 32).setValue(commentsNotesVal);   // H: Date Weaned
+    sowDB.getRange(rowNum, 32).setValue(commentsNotesVal);   // AF: Comments and Notes
   }
 
   // --- Success message ---
@@ -634,10 +635,6 @@ function deleteSowManagement() {
       // User confirmed, proceed with deletion
       sowDatabaseSheet.deleteRow(foundRowIndex);
 
-      // Clearing the displayed information on deletion
-      //sowFormSheet.getRange('E7').clearContent();
-
-
       // Clearing content for Gilts section
       formSheet.getRange("F13").clearContent(); // Sow ID
       formSheet.getRange("I13").clearContent(); // Boar ID
@@ -684,7 +681,7 @@ function deleteSowManagement() {
       formSheet.getRange("I50").clearContent(); // Expected Weaning Date
       formSheet.getRange("I52").clearContent(); // Flush feeding sow pre-mating
 
-      ui.alert('Data has been delated!', ui.ButtonSet.OK);
+      ui.alert('Data has been deleted!', ui.ButtonSet.OK);
     } else {
       // User canceled, display cancel alert
       ui.alert('Delete Canceled', 'Deletion has been canceled.', ui.ButtonSet.OK);
@@ -969,20 +966,21 @@ function generateSowPDF(sowId, sowRows, litterRows) {
     body.appendParagraph('Litter Information')
       .setHeading(DocumentApp.ParagraphHeading.HEADING3);
 
-    appendField(body, 'Date of Birth', litter[5]);              // F
-    appendField(body, 'Total Born', litter[6]);                 // G
-    appendField(body, 'Born Dead', litter[7]);                  // H
-    appendField(body, 'Mummified', litter[8]);                  // I
-    appendField(body, 'Born Alive', litter[9]);                 // J
-    appendField(body, 'Total Birth Weight', litter[10]);        // K
-    appendField(body, 'Date Weaned', litter[11]);               // L
-    appendField(body, 'Number Weaned', litter[12]);             // M
-    appendField(body, 'Date Killed', litter[13]);               // N
-    appendField(body, 'Number Sent To Abattoir', litter[14]);   // O
-    appendField(body, 'Total Carcass Weight', litter[15]);      // P
-    appendField(body, 'Age at Slaughter', litter[16]);          // Q
-    appendField(body, 'Number Sold as Breeding Stock', litter[17]); // R
-    appendField(body, 'Total Weight Sold Live', litter[18]);    // S
+    appendField(body, 'Date of Birth',              litter[5]);   // F
+    appendField(body, 'Born Alive',                 litter[6]);   // G → Born Alive (swapped)
+    appendField(body, 'Born Dead',                  litter[7]);   // H
+    appendField(body, 'Mummified',                  litter[8]);   // I
+    appendField(body, 'Overlays & Other Causes',    litter[9]);   // J
+    appendField(body, 'Total Born',                 litter[10]);  // K → Total Born (swapped)
+    appendField(body, 'Total Birth Weight',         litter[11]);  // L
+    appendField(body, 'Date Weaned',                litter[12]);  // M
+    appendField(body, 'Number Weaned',              litter[13]);  // N
+    appendField(body, 'Date Killed',                litter[14]);  // O
+    appendField(body, 'Number Sent To Abattoir',    litter[15]);  // P
+    appendField(body, 'Total Carcass Weight',       litter[16]);  // Q
+    appendField(body, 'Age at Slaughter',           litter[17]);  // R
+    appendField(body, 'Number Sold as Breeding Stock', litter[18]); // S
+    appendField(body, 'Total Weight Sold Live',     litter[19]);  // T
   }
   else {
       body.appendParagraph('No litter data found.')
@@ -1187,7 +1185,7 @@ function generateReporting() {
   if (!match) return null;
 
   let [, d, m, y] = match.map(Number);
-  if (y < 100) y += 2000;              // treat “25” as 2025, not year 25
+  if (y < 100) y += 2000;              // treat "25" as 2025, not year 25
   return new Date(y, m - 1, d);
   }
 
