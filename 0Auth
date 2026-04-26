@@ -12,9 +12,13 @@
 // can be queried. It never stores "is valid = true/false" because
 // that is what Firebase is for.
 //
-// onEdit in the user-side script only reverts edits on non-Sign-In
-// sheets. Sign-In is always fully editable so the user can type
-// their credentials.
+// CACHING:
+// To prevent Firebase bandwidth quota errors on the Spark plan,
+// a successful license check is cached in UserProperties for
+// CACHE_DURATION_MS (1 hour). The cache stores only the result
+// of the last valid check — it never stores "valid=true" directly.
+// Firebase is always queried on: first use, cache expiry, and
+// any time validateLicense() or lockSystem() is called.
 //
 // ============================================================
 
@@ -32,14 +36,53 @@ const STATUS_CELL       = "D14";
 const PROP_EMAIL       = "LICENSED_EMAIL";
 const PROP_LICENSE_KEY = "LICENSED_KEY";
 
+// Cache keys and duration
+const PROP_CACHE_RESULT    = "LICENSE_CACHE_RESULT";   // JSON of last valid result
+const PROP_CACHE_TIMESTAMP = "LICENSE_CACHE_TIMESTAMP"; // ms timestamp of last Firebase hit
+const CACHE_DURATION_MS    = 60 * 60 * 1000;           // 1 hour
+
 function getProps() {
   return PropertiesService.getUserProperties();
 }
 
+// ── CACHE HELPERS ─────────────────────────────────────────────
+
+// Returns a cached result if it is still fresh, otherwise null.
+function getCachedResult() {
+  const props     = getProps();
+  const timestamp = parseInt(props.getProperty(PROP_CACHE_TIMESTAMP) || "0", 10);
+  const cached    = props.getProperty(PROP_CACHE_RESULT);
+
+  if (!cached || !timestamp) return null;
+
+  const age = Date.now() - timestamp;
+  if (age > CACHE_DURATION_MS) return null; // cache expired
+
+  try {
+    return JSON.parse(cached);
+  } catch (e) {
+    return null;
+  }
+}
+
+// Stores a successful Firebase result in the cache.
+function setCachedResult(result) {
+  const props = getProps();
+  props.setProperty(PROP_CACHE_RESULT,    JSON.stringify(result));
+  props.setProperty(PROP_CACHE_TIMESTAMP, String(Date.now()));
+}
+
+// Clears the cache (called on lock/validate so next check always hits Firebase).
+function clearCache() {
+  const props = getProps();
+  props.deleteProperty(PROP_CACHE_RESULT);
+  props.deleteProperty(PROP_CACHE_TIMESTAMP);
+}
 
 // ── LIVE FIREBASE CHECK ───────────────────────────────────────
 // Called by assertSystemAccess() on every button press.
 // Returns { valid, benchmarkEnabled, reason, expirationDate }
+// Uses a 1-hour cache to stay within Firebase Spark plan quotas.
 function checkLicenseNow() {
   const props      = getProps();
   const email      = props.getProperty(PROP_EMAIL)       || "";
@@ -49,7 +92,21 @@ function checkLicenseNow() {
     return { valid: false, reason: "No credentials found. Please validate your license first." };
   }
 
-  return queryFirebase(email, licenseKey, SpreadsheetApp.getActiveSpreadsheet().getId());
+  // ── Check cache first ────────────────────────────────────────
+  const cached = getCachedResult();
+  if (cached) {
+    Logger.log("License check served from cache (age < 1 hour).");
+    return cached;
+  }
+
+  // ── Cache miss — query Firebase ──────────────────────────────
+  Logger.log("Cache miss or expired — querying Firebase.");
+  const result = queryFirebase(email, licenseKey, SpreadsheetApp.getActiveSpreadsheet().getId());
+
+  // Only cache valid results — invalid results (revoked, expired) always re-check
+  if (result.valid) setCachedResult(result);
+
+  return result;
 }
 
 // Raw Firebase query — returns { valid, benchmarkEnabled, reason, expirationDate }
@@ -122,27 +179,22 @@ function queryFirebase(email, licenseKey, sheetId) {
 
 // ── ACCESS GUARDS ─────────────────────────────────────────────
 // Every button-triggered function in the library starts with one of these.
-// They call Firebase live — no cached state, no way to bypass by skipping
-// the validate step.
+// They use the 1-hour cache — only the first call per hour hits Firebase.
 
 function assertSystemAccess() {
   const result = checkLicenseNow();
   if (!result.valid) {
     SpreadsheetApp.getUi().alert(
       "Access Denied",
-      result.reason + "\n\nContact info@training4farmers.com",
+      result.reason,
       SpreadsheetApp.getUi().ButtonSet.OK
     );
     lockAllSheets();
     throw new Error("ACCESS_DENIED");
   }
-  // License is valid — ensure sheets are unlocked
-  unlockAllSheets();
 }
 
 function assertBenchmarkAccess() {
-  // assertSystemAccess() handles all license checks first — if this returns,
-  // we know the license is valid. Only then check the benchmark flag.
   const result = checkLicenseNow();
 
   if (!result.valid) {
@@ -164,13 +216,12 @@ function assertBenchmarkAccess() {
     throw new Error("BENCHMARK_NOT_ENABLED");
   }
 
-  unlockAllSheets();
+ // unlockAllSheets();
 }
 
 // ── VALIDATE LICENSE (user-facing) ────────────────────────────
-// Called from the menu. Reads credentials from Sign-In sheet,
-// saves them to UserProperties, then does a live Firebase check.
-// "Validate" not "Activate" — the license is activated on the admin side.
+// Always hits Firebase directly — bypasses cache intentionally.
+// Saves credentials and refreshes the cache on success.
 function validateLicense() {
   const ss          = SpreadsheetApp.getActiveSpreadsheet();
   const signInSheet = ss.getSheetByName(SIGNIN_SHEET_NAME);
@@ -185,8 +236,8 @@ function validateLicense() {
   const licenseKey = signInSheet.getRange(LICENSE_KEY_CELL).getValue().toString().trim();
 
   if (!email || !licenseKey) {
-    // Wipe any previously stored credentials so buttons cannot use stale state
     getProps().deleteAllProperties();
+    clearCache();
     lockAllSheets();
     writeStatus("Locked");
     ui.alert(
@@ -197,17 +248,19 @@ function validateLicense() {
     return;
   }
 
+  // Always query Firebase directly on explicit validate — ignore cache
   const result = queryFirebase(email, licenseKey, ss.getId());
 
   if (result.valid) {
-    // Save credentials so future assertSystemAccess() calls can query Firebase
     const props = getProps();
     props.setProperty(PROP_EMAIL,       email);
     props.setProperty(PROP_LICENSE_KEY, licenseKey);
 
-    // Write expiry to Sign-In sheet for user reference only — not used for validation
+    // Refresh cache with the fresh result
+    setCachedResult(result);
+
     signInSheet.getRange(EXPIRY_DATE_CELL).setValue(result.expirationDate);
-    writeStatus("Validated"); //— Expiry: " + result.expirationDate
+    writeStatus("Validated");
     unlockAllSheets();
 
     ui.alert(
@@ -218,8 +271,8 @@ function validateLicense() {
     );
 
   } else {
-    // Clear stored credentials so buttons immediately fail the Firebase check
     getProps().deleteAllProperties();
+    clearCache();
     writeStatus("Invalid");
     lockAllSheets();
 
@@ -232,9 +285,7 @@ function validateLicense() {
 }
 
 // ── ON OPEN ───────────────────────────────────────────────────
-// Called from the user-side onOpen() wrapper.
-// Does a live Firebase check and locks/unlocks accordingly.
-// Menu is built in the user-side script (more reliable for simple triggers).
+// Uses the cache — avoids a Firebase hit every time the sheet opens.
 function onOpen() {
   const result = checkLicenseNow();
   if (result.valid) {
@@ -248,10 +299,10 @@ function onOpen() {
 }
 
 // ── LOCK SYSTEM (manual) ──────────────────────────────────────
-// Clears stored credentials and locks all sheets.
-// User must re-validate to regain access.
+// Clears stored credentials, cache, and locks all sheets.
 function lockSystem() {
   getProps().deleteAllProperties();
+  clearCache();
   clearBenchmarkData();
   lockAllSheets();
   writeStatus("Locked");
@@ -278,7 +329,15 @@ function lockAllSheets() {
 }
 
 function unlockAllSheets() {
-  SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(sheet => {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hasLocks = ss.getSheets().some(sheet =>
+    sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET)
+         .some(p => p.getDescription() === "SYSTEM_LOCK")
+  );
+
+  if (!hasLocks) return; // nothing to do
+
+  ss.getSheets().forEach(sheet => {
     sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(p => {
       if (p.getDescription() === "SYSTEM_LOCK") p.remove();
     });
@@ -358,3 +417,4 @@ function showSignInPrompt() {
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
+
